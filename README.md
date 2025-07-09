@@ -8,7 +8,7 @@
 **bHapticsRelay** is a tool for modders and developers who want to add bHaptics support to any game or app.
 
 > [!TIP]
-> If you're just looking for the SDK2 API reference, you can find it here: [**bHaptics SDK2 API reference**](https://github.com/Dteyn/bHapticsRelay/tree/main?tab=readme-ov-file#bhaptics-sdk2-api-reference)
+> If you're just looking for the SDK2 API reference, you can find it here: [**bHaptics SDK2 API reference**](https://github.com/Dteyn/bHapticsRelay?tab=readme-ov-file#bhaptics-sdk2-api-reference)
 
 ## How does it work?
 
@@ -50,7 +50,7 @@ New features in SDK2 include (but are not limited to):
 
 - Offline mode is supported via the 'Default Config' option, which bHapticsRelay supports and is detailed further down in this guide.
 
-I've also included a full [**bHaptics SDK2 API reference**](https://github.com/Dteyn/bHapticsRelay/tree/main?tab=readme-ov-file#bhaptics-sdk2-api-reference) at the bottom of this document, which includes examples for using via bHapticsRelay, as well as C# examples for integrating SDK2 into other projects.
+I've also included a full [**bHaptics SDK2 API reference**](https://github.com/Dteyn/bHapticsRelay?tab=readme-ov-file#bhaptics-sdk2-api-reference) at the bottom of this document, which includes examples for using via bHapticsRelay, as well as C# examples for integrating SDK2 into other projects.
 
 # General Overview
 
@@ -63,7 +63,7 @@ I've also included a full [**bHaptics SDK2 API reference**](https://github.com/D
 
 **bHapticsRelay** itself is a hobby project provided for free and without any warranties. It's ***not an official bHaptics product***, and it doesn't come with any game-specific profiles itself. The tool is essentially a lightweight integration layer and uses bHaptics's proprietary SDK libraries under the hood.
 
-Modders must use the official bHaptics Designer and Developer Portal to create haptic patterns and events, and in turn may use this bridge to trigger those events from their game mod.
+Modders must use the official bHaptics Designer and Developer Portal to create haptic patterns and events, and in turn may use this relay to trigger those events from their game mod.
 
 Once deployed, players must use the official bHaptics Player software in conjunction with bHapticsRelay in order to feel the haptic effects.
 
@@ -86,7 +86,7 @@ The general workflow of the application is:
 
 **Config Loading**: On startup, bHapticsRelay reads its `config.cfg` file to determine settings like which mode to use (log or WebSocket), file paths, network ports, and offline mode details. It also loads any offline event data if provided (see *Offline Fallback* below). This allows modders to adapt the tool to different games without recompiling.
 
-**bHaptics Player**: The bridge initializes the bHaptics SDK connection using SDK2 (via `bhaptics_library.dll`). It checks if the bhaptics Player is installed and/or running. If installed but not running, a 'Launch Player' button is provided.
+**bHaptics Player**: The relay initializes the bHaptics SDK connection using SDK2 (via `bhaptics_library.dll`). It checks if the bhaptics Player is installed and/or running. If installed but not running, a 'Launch Player' button is provided.
 
 **Registration**: Once initialized, the app registers the haptic events either via an online API call (using your App ID/API key) or via a local JSON file (offline mode).
 
@@ -94,17 +94,17 @@ The general workflow of the application is:
 
 **Modes Supported**: Currently, bHapticsRelay supports two input methods for receiving haptic commands from games. More methods may be added in the future.
 
-- **Log File Tailing Mode**: In this mode, the bridge monitors a specified text log file in real-time. It searches each new line for the token `[bHaptics]command`. If a line contains `[bHaptics]command`, the bridge will interpret this as a haptic trigger.
+- **Log File Tailing Mode**: In this mode, the relay monitors a specified text log file in real-time. It searches each new line for the token `[bHaptics]command`. If a line contains `[bHaptics]command`, the relay will interpret this as a haptic trigger.
 
-- **WebSocket Server Mode**: In this mode, the bridge hosts an internal WebSocket server and listens for incoming commands. Game mods or external scripts can connect to this WebSocket (e.g. `ws://127.0.0.1:50451`) and send commands to trigger haptics.
+- **WebSocket Server Mode**: In this mode, the relay hosts an internal WebSocket server and listens for incoming commands. Game mods or external scripts can connect to this WebSocket (e.g. `ws://127.0.0.1:50451`) and send commands to trigger haptics.
 
 The WebSocket server also sends replies with return values, allowing for two-way communication with bHaptics Player. This is useful if the modding environment has networking support or if you prefer a direct programmatic approach instead of writing to a log file.
 
-**Haptic Event Dispatch**: Whether an event command comes from the tail log or the WebSocket, the bridge handles it the same way: it parses the event name and any parameters and calls the appropriate bHaptics SDK function. Events are identified by their Event ID (a string name, like `HeartBeat`) which must match an event in your bHaptics app configuration in the Developer Portal.
+**Haptic Event Dispatch**: Whether an event command comes from the tail log or the WebSocket, the relay handles it the same way: it parses the event name and any parameters and calls the appropriate bHaptics SDK function. Events are identified by their Event ID (a string name, like `HeartBeat`) which must match an event in your bHaptics app configuration in the Developer Portal.
 
 Modders can refer to the **bHaptics SDK2 API Reference** at the bottom of this document for details on all the commands supported, and how to use them.
 
-**Player Connection & Checks**: The bridge continuously ensures it has a valid connection to bHaptics Player. If the Player isn't running or if the connection is lost, bHapticsRelay will log an error or attempt to reconnect.
+**Player Connection & Checks**: The relay continuously ensures it has a valid connection to bHaptics Player. If the Player isn't running or if the connection is lost, bHapticsRelay will log an error or attempt to reconnect.
 
 **Debug Logging**: Debug logging statements are built into the codebase, which are normally disabled on Release version. When developing a mod, using the Debug version is recommended to obtain the most detailed logging info for setup and troubleshooting.
 
@@ -125,7 +125,7 @@ This is similar to providing .tact files when using SDK1 -- using the offline JS
 As mentioned above, bHapticsRelay supports two modes for receiving commands: **Log File Monitoring** and **WebSocket**.
 
 ### Log File Monitoring Mode
-In this mode, the bridge continuously watches a specified log file. It specifically looks for log entries tagged with `[bHaptics]`. Anything following that tag is considered a Command.
+In this mode, the relay continuously watches a specified log file. It specifically looks for log entries tagged with `[bHaptics]`. Anything following that tag is considered a Command.
 
 For example:
 
@@ -137,7 +137,7 @@ When bHapticsRelay sees a tagged entry in the log, it extracts the command immed
 > In Log File Monitoring mode, bHapticsRelay processes the commands and sends them to bHaptics Player, but doesn't return or log any feedback about the result.
 
 ### WebSocket Server Mode
-In this mode, the bridge can receive commands directly over WebSocket connections. In WebSocket mode, ***you do not need*** the `[bHaptics]` tag. Instead, you simply send commands directly, such as:
+In this mode, the relay can receive commands directly over WebSocket connections. In WebSocket mode, ***you do not need*** the `[bHaptics]` tag. Instead, you simply send commands directly, such as:
 
 `play,Explosion`
 
@@ -145,7 +145,7 @@ In this mode, the bridge can receive commands directly over WebSocket connection
 > The WebSocket mode **does** send back results to the client after processing each command, letting you know immediately if your command succeeded or failed, or providing request ID's or data as requested.
 
 ### Command Handling
-Regardless of the mode used, the parsing logic for the command handler remains consistent. The bridge splits each incoming command string by commas. The first part is interpreted as the function name (like `play`, `stop`, etc.), and any remaining parts are treated as parameters.
+Regardless of the mode used, the parsing logic for the command handler remains consistent. The relay splits each incoming command string by commas. The first part is interpreted as the function name (like `play`, `stop`, etc.), and any remaining parts are treated as parameters.
 
 Once parsed, the command and its parameters are passed directly to the corresponding methods provided by the bHaptics SDK2 `bhaptics_library.dll`.
 
@@ -334,7 +334,7 @@ Readme.txt (attributions & credits - please don't omit!)
 ```
 
 > [!NOTE]  
-> Only the Default Config JSON is optional; everything else is required for the bridge to start and run.
+> Only the Default Config JSON is optional; everything else is required for the relay to start and run.
 
 > [!IMPORTANT]  
 > **Please do not omit the `Readme.txt` file** - it contains attributions for bHaptics, bHapticsRelay and other important information for the end-user.
@@ -351,7 +351,7 @@ You may modify the `Readme.txt` file (in fact, this would be recommended), but p
 End users will install and run the mod as follows. More detailed instructions are included in `Readme.txt`.
 
 1. **Unzip** the archive to any folder on their PC (no admin rights needed).
-2. **Double-click** `bHapticsRelay.exe` to launch the bridge. They'll see your game title, version, and Test Event button.
+2. **Double-click** `bHapticsRelay.exe` to launch the relay. They'll see your game title, version, and Test Event button.
 
 > [!NOTE]  
 > All paths in `config.cfg` are relative to the EXE's folder, so players can drop the whole folder anywhere such as on the desktop, in `Program Files`, or even in the game folder itself.
@@ -447,7 +447,7 @@ Microsoft.Extensions.*.dll
 
 ### Debug Logging
 
-In Debug configuration, bHapticsRelay will generate additional debug logging in the `/Logs/bhaptic-bridge-(date).txt` log file.
+In Debug configuration, bHapticsRelay will generate additional debug logging in the `/Logs/bhaptics-relay-(date).txt` log file.
 
 Once you have everything dialed in, change the Solution Configuration to Release and you should be good to go. Feel free to open an Issue or reach out if you have any questions.
 
@@ -518,17 +518,17 @@ As a result, the player feels a 'potion drinking' effect anytime they drink a po
 
 **Ensure the tag is exact**
 
-The bridge looks for the exact case-sensitive string `[bHaptics]` in the log line. Make sure your output matches this format exactly, including the square brackets and capitalization. The event name inside is also case-sensitive and should exactly match what you have in your haptic config (IDs typically are lowercase).
+The relay looks for the exact case-sensitive string `[bHaptics]` in the log line. Make sure your output matches this format exactly, including the square brackets and capitalization. The event name inside is also case-sensitive and should exactly match what you have in your haptic config (IDs typically are lowercase).
 
 **Write one event per line**
 
-It's safest to output the tag in its own line or at least ensure it's not appearing multiple times in one line. The bridge will typically trigger on the first occurrence per line.
+It's safest to output the tag in its own line or at least ensure it's not appearing multiple times in one line. The relay will typically trigger on the first occurrence per line.
 
-If you want to trigger multiple events at once, you can output multiple lines (the bridge can handle them in quick succession).
+If you want to trigger multiple events at once, you can output multiple lines (the relay can handle them in quick succession).
 
 **Log timing**
 
-The bridge reads the log file continuously. There may be a tiny delay (typically only milliseconds) between your mod writing the line and the bridge reacting, depending on file I/O buffering. For most haptic feedback, this latency is negligible.
+The relay reads the log file continuously. There may be a tiny delay (typically only milliseconds) between your mod writing the line and the relay reacting, depending on file I/O buffering. For most haptic feedback, this latency is negligible.
 
 **Custom log files**
 
@@ -540,7 +540,7 @@ In WebSocket mode, your mod needs to act as a client that sends messages to a lo
 
 **General Approach**
 
-From your mod or script, establish a WebSocket connection to `ws://localhost:<port>` (make sure the port matches the one you specified in `config.cfg`). The bridge will accept the connection from any local client.
+From your mod or script, establish a WebSocket connection to `ws://localhost:<port>` (make sure the port matches the one you specified in `config.cfg`). The relay will accept the connection from any local client.
 
 > [!NOTE]  
 > For security reasons, **only clients on the same PC or LAN** can connect to bHapticsRelay. The websocket server is not accessible over the internet.
@@ -604,7 +604,7 @@ Best practice would be to make your mod easily configurable on the client side, 
 
 **Connection handling**
 
-Your mod should ideally handle the case where bHapticsRelay isn't running or the socket can't connect. Usually, if the bridge isn't up, the connection will refuse, so some error handling here would be useful on your mod's client side.
+Your mod should ideally handle the case where bHapticsRelay isn't running or the socket can't connect. Usually, if the relay isn't up, the connection will refuse, so some error handling here would be useful on your mod's client side.
 
 **One message at a time**
 
