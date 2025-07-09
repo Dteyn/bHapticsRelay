@@ -1,0 +1,3 @@
+Test log file - to simulate game events, write new lines to the log file then save.
+For example:
+[bHaptics]play,testeffect
