@@ -3,6 +3,8 @@
 > [!WARNING]
 > This project is a **Work-In-Progress** and should be considered Early Access at this point. If you encounter any troubles, please open an Issue so the tool can be improved!
 
+![screenshot-v020-alpha](https://github.com/user-attachments/assets/d44ef6d2-26cb-4833-9720-f75c0588eedf)
+
 ## What is bHapticsRelay?
 
 **bHapticsRelay** is a tool for modders and developers who want to add bHaptics support to any game or app.
