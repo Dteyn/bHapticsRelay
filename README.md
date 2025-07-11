@@ -439,6 +439,12 @@ If you'd like to build bHapticsRelay yourself (to customize, debug, or contribut
 * **Visual Studio 2022+** with **.NET desktop development** workloads
 * (Optional) **Git** to clone the repo
 
+### bhaptics_library.dll
+
+For licensing reasons, the `bhaptics_library.dll` file is not included on this repo. You must download it separately from the `tact-csharp2` bHaptics repo:
+
+Link: [bhaptics_library.dll](https://github.com/bhaptics/tact-csharp2/raw/refs/heads/master/tact-csharp2/tact-csharp2/bhaptics_library.dll)
+
 ### Required NuGet Packages & Versions
 
 - Fleck 1.2.0
