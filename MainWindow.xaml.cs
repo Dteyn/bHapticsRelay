@@ -1,9 +1,15 @@
-﻿using Fleck;
+﻿// bHapticsRelay v0.3.0
+// Date: 9/02/2025
+
+// TODO: General cleanup and organization, docstrings consistency, etc
+
+using Fleck;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Win32;
 using Serilog;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -11,6 +17,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Timers;
 using System.Windows;
@@ -19,10 +26,9 @@ using tact_csharp2;
 
 namespace bHapticsRelay
 {
-
     public partial class MainWindow : Window, IDisposable
     {
-        private const string AboutInfo = "bHapticsRelay v0.2.0 by Dteyn";
+        private const string AboutInfo = "bHapticsRelay v0.3.0 by Dteyn";
 
         // services & config
         IConfigurationRoot? _cfg;
@@ -31,25 +37,40 @@ namespace bHapticsRelay
         private System.Timers.Timer? _statusTimer;
         private System.Timers.Timer? _logPollTimer;
 
-        // active WS clients
-        private readonly ConcurrentBag<IWebSocketConnection> _clients = new();
-
         // tweakable constants
         private const int STATUS_TIMER_INTERVAL_MS = 1000;
         private const int LOG_POLL_INTERVAL_MS = 250;
 
+        // request ID generator - generate sequential request IDs when needed
+        private static int _nextRequestId = 0;
+        private static int NextRequestId() => Interlocked.Increment(ref _nextRequestId);
+
+        // active WS clients (keyed by generated GUID so we can remove the exact client on close)
+        private readonly ConcurrentDictionary<Guid, IWebSocketConnection> _clients = new();
+
+        // startup async
+        private CancellationTokenSource? _lifecycleCts;
+        private volatile bool _initInProgress;
+        private readonly TimeSpan _playerStartTimeout = TimeSpan.FromSeconds(45);
+        private readonly TimeSpan _wsReadyTimeout = TimeSpan.FromSeconds(30);
+        private readonly TimeSpan _mappingsTimeout = TimeSpan.FromSeconds(8);
+        private readonly TimeSpan _pollInterval = TimeSpan.FromMilliseconds(250);
+
+        // settings
+        private string? _offlineConfigJson;
         string? _appTitle, _appVersion;
         string? _mode, _logFile, _testEvent;
         string? _apiKey, _appId;
         int _port;
 
+        // state and position tracking
         private readonly object _tailSync = new();
         long _lastPos = 0;
 
         public MainWindow()
         {
             InitializeComponent();
-            AboutText.Text = AboutInfo;
+            AboutText.Text = AboutInfo;  // Set About text
             this.Loaded += Window_Loaded;
 
             // Create Logs folder if it doesn't exist
@@ -162,7 +183,7 @@ namespace bHapticsRelay
             File.WriteAllLines(cfgPath, lines);
         }
 
-        private async void Window_Loaded(object sender, RoutedEventArgs e)
+        private void Window_Loaded(object sender, RoutedEventArgs e)
         {
             // Make sure bHaptics Player is installed, if not, bail
             if (!BhapticsSDK2Wrapper.isPlayerInstalled())
@@ -178,7 +199,12 @@ namespace bHapticsRelay
 
             // Update the connection status indicator
             UpdateIndicator();
-            
+
+            // Start status poller
+            _statusTimer = new System.Timers.Timer(STATUS_TIMER_INTERVAL_MS);
+            _statusTimer.Elapsed += (_, __) => Dispatcher.Invoke(UpdateIndicator);
+            _statusTimer.Start();
+
             // Load config.cfg file
             try
             {
@@ -209,11 +235,11 @@ namespace bHapticsRelay
 
             string? Trimmed(string? s) => s?.Trim();
 
-            // SECTION: Settings
+            // CONFIG SECTION: Settings
             // Get app title and version
             _appTitle = _cfg["Settings:Title"]?.Trim();
             _appVersion = _cfg["Settings:Version"]?.Trim();
-            if (string.IsNullOrEmpty(_appTitle)) _appTitle = "The Win";
+            if (string.IsNullOrEmpty(_appTitle)) _appTitle = "The Win"; 
             if (string.IsNullOrEmpty(_appVersion)) _appVersion = "1.2.3";
 
             // Update the title bar and label
@@ -247,14 +273,14 @@ namespace bHapticsRelay
                 WebsocketPanel.Visibility = Visibility.Collapsed;
             }
 
-            // SECTION: bHaptics
+            // CONFIG SECTION: bHaptics
             // Get Api Key, App ID and default config
             _apiKey = Trimmed(_cfg["bHaptics:ApiKey"]) ?? "";
             _appId = Trimmed(_cfg["bHaptics:AppId"]) ?? "";
 
             // Read the Default Config into a JSON object
             string? defaultConfigName = _cfg["bHaptics:DefaultConfig"]?.Trim();
-            string _offlineConfigJson  = null!;
+            _offlineConfigJson  = null;
             if (!string.IsNullOrWhiteSpace(defaultConfigName))
             {
                 var cfgPath = Path.Combine(AppContext.BaseDirectory, defaultConfigName);
@@ -290,72 +316,140 @@ namespace bHapticsRelay
             LogFileTextBox.Text = _logFile;
             Log.Information("Starting in {Mode}", _mode);
 
-            // 2) Init bHaptics SDK using API Key and App ID, use default config if offline
-            // Try the cloud first
-            bool ok = BhapticsSDK2Wrapper.registryAndInit(_apiKey!, _appId!, string.Empty);
 
-            if (ok)
+            // INITIALIZATION
+            // Kick off initialization
+            _lifecycleCts = new CancellationTokenSource();
+            _ = StartupAsync(_lifecycleCts.Token);
+        }
+
+        private async Task StartupAsync(CancellationToken ct)
+        {
+            if (_initInProgress) return;
+            _initInProgress = true;
+            try
             {
-                // Ask the server for mapping data 
-                int mapStatus;
-                IntPtr ptr = BhapticsSDK2Wrapper.bHapticsGetHapticMappings(_apiKey!, _appId!, 0, out mapStatus);
-
-                // string? serverMappings = Marshal.PtrToStringUTF8(ptr);  // replaced with our PtrToUtf8
-                string? serverMappings = PtrToUtf8(ptr);
-
-                // If mapStatus returned is 0 AND there is at least one mapping, we are connected via cloud
-                if (mapStatus != 0 || string.IsNullOrWhiteSpace(serverMappings) || serverMappings == "[]")
+                // Ensure Player is running
+                if (!BhapticsSDK2Wrapper.isPlayerRunning())
                 {
-                    Log.Warning("Cloud init failed, no server mappings. Reverting to Default Config JSON.");
-                    ok = false;   // we are not okay. force fallback below
+                    BhapticsSDK2Wrapper.launchPlayer(true);
+
+                    Dispatcher.Invoke(() => ConnStatusText.Text = "(launching bHaptics Player...)");
+                    bool playerReady = await WaitUntilAsync(
+                        () => BhapticsSDK2Wrapper.isPlayerRunning(),
+                        _playerStartTimeout, _pollInterval, ct);
+
+                    if (!playerReady)
+                    {
+                        Log.Warning("Player did not start in time; staying in 'not connected' UI.");
+                        return; // UI timer will keep reflecting state
+                    }
                 }
 
-            }
+                // Cloud register (empty initData per vendor requirement)
+                Dispatcher.Invoke(() => ConnStatusText.Text = "(initializing API...)");
+                bool ok = BhapticsSDK2Wrapper.registryAndInit(_apiKey!, _appId!, string.Empty);
 
-            if (!ok)  
-            {
-                // If we get here, cloud init failed, or we got no mappings from it. Register using offline JSON.
-                if (string.IsNullOrEmpty(_offlineConfigJson))
+                if (ok)
                 {
-                    MessageBox.Show("No Default Config JSON available, and online auth failed. Cannot proceed.",
-                                "bHapticsRelay", MessageBoxButton.OK, MessageBoxImage.Error);
-                    Close();
-                    return;
+                    Log.Debug("Cloud API registration successful.");
                 }
 
-                // Disable validation in the blob - this is required, or else the player will reject us
-                _offlineConfigJson = PrepareOfflineJson(_offlineConfigJson);
+                // Wait for Player WebSocket
+                Dispatcher.Invoke(() => ConnStatusText.Text = "(waiting for Player WebSocket...)");
+                bool wsReady = await WaitUntilAsync(
+                    () => BhapticsSDK2Wrapper.wsIsConnected(),
+                    _wsReadyTimeout, _pollInterval, ct);
 
-                // Use reInitMessage to try and register the offline JSON
-                ok = BhapticsSDK2Wrapper.reInitMessage(_apiKey!, _appId!, _offlineConfigJson);
+                if (!wsReady)
+                {
+                    Log.Debug("WebSocket not connected within timeout; will keep waiting in background.");
+                }
+
+                // If cloud connected, poll mappings
+                if (ok && wsReady)
+                {
+                    string? mappings = await Task.Run(() => PollMappingsJson(_mappingsTimeout, 100), ct);
+                    if (string.IsNullOrWhiteSpace(mappings) || mappings == "[]")
+                    {
+                        Log.Debug("Server mappings not ready yet.");
+                    }
+                }
+
+                // Offline fallback
+                if (!ok)
+                {
+                    Dispatcher.Invoke(() => ConnStatusText.Text = "(offline config)");
+
+                    if (string.IsNullOrWhiteSpace(_offlineConfigJson))
+                    {
+                        Log.Debug("Offline fallback requested but no Default Config JSON is available.");
+                        // Nothing else we can do — leave UI running; if Player/WS comes up later the indicator will flip.
+                        return;
+                    }
+
+                    // Ensure the offline Json has validation disabled so the Player will accept it
+                    string offlineJson = PrepareOfflineJson(_offlineConfigJson);
+
+                    Log.Information("Attempting offline reInitMessage with Default Config JSON.");
+                    bool reOk = false;
+                    try
+                    {
+                        reOk = BhapticsSDK2Wrapper.reInitMessage(_apiKey!, _appId!, offlineJson);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Debug(ex, "reInitMessage error while applying offline config.");
+                        reOk = false;
+                    }
+
+                    if (!reOk)
+                    {
+                        Log.Debug("Offline reInitMessage failed; remaining in not-connected state.");
+                        // Leave the app running; UI timer keeps reflecting actual state and user can launch Player later.
+                        return;
+                    }
+
+                    // Best-effort: if WS wasn’t ready earlier, give it a short window to flip connected
+                    _ = await WaitUntilAsync(
+                        () => BhapticsSDK2Wrapper.wsIsConnected(),
+                        TimeSpan.FromSeconds(10),  // small grace window
+                        _pollInterval, ct);
+
+                    Log.Information("Online connection failed - offline fallback applied.");
+                }
+
+                // Start input mode
+                if (_mode?.Equals("Tail", StringComparison.OrdinalIgnoreCase) == true)
+                    StartTailing();
+                else
+                    StartWebSocket();
             }
-
-            if (!ok)
+            catch (OperationCanceledException) { /* window closing */ }
+            catch (Exception ex)
             {
-                // If we get here, it means bHaptics Player didn't allow us to register online or offline. Womp womp.
-                MessageBox.Show("bHaptics API initialize failed (cloud and offline). Cannot proceed.",
-                                "bHapticsRelay", MessageBoxButton.OK, MessageBoxImage.Error);
-                Close();
-                return;
+                Log.Error(ex, "Startup orchestration failed.");
             }
+            finally { _initInProgress = false; }
+        }
 
-            // Wait until bHaptics Player websocket connection is active
-            Log.Information("Waiting for bHaptics Player Websocket connection...");
-            await Task.Run(() =>
-                SpinWait.SpinUntil(() => BhapticsSDK2Wrapper.wsIsConnected()));
-            Log.Information("Connected to bHaptics Player.");
+        // Helper for polling Json mappings
+        private static string? PollMappingsJson(TimeSpan total, int intervalMs)
+        {
+            var deadline = DateTime.UtcNow + total;
+            string? last = null;
 
-            // 3) Start status poller
-            _statusTimer = new System.Timers.Timer(STATUS_TIMER_INTERVAL_MS);
-            _statusTimer.Elapsed += (_, __) => Dispatcher.Invoke(UpdateIndicator);
-            _statusTimer.Start();
+            while (DateTime.UtcNow < deadline)
+            {
+                IntPtr ptr = BhapticsSDK2Wrapper.getHapticMappingsJson();
+                last = PtrToUtf8(ptr);
 
-            // 4) Start input mode
-            if (_mode == null) return;
-            if (_mode.Equals("Tail", StringComparison.OrdinalIgnoreCase))
-                StartTailing();
-            else
-                StartWebSocket();
+                if (!string.IsNullOrWhiteSpace(last) && last != "[]")
+                    return last;
+
+                Thread.Sleep(intervalMs);
+            }
+            return last; // will be null/empty/"[]" if nothing arrived in time
         }
 
         private void UpdateIndicator()
@@ -403,7 +497,11 @@ namespace bHapticsRelay
             {
                 MessageBox.Show("Failed to launch bHaptics Player.", "bHapticsRelay", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-            // Optionally force UI update after clicking
+
+            // Start init if it's not in progress already
+            if (result && !_initInProgress)
+                _ = StartupAsync(_lifecycleCts?.Token ?? CancellationToken.None);
+            
             UpdateIndicator();
         }
 
@@ -412,7 +510,7 @@ namespace bHapticsRelay
             if (string.IsNullOrWhiteSpace(_logFile))
             {
                 Log.Error("LogFile not set");
-                MessageBox.Show("No log-file configured for tailing.\nUse the Browse… button or set one in config.cfg.",
+                MessageBox.Show("No log file configured for tailing.\nUse the Browse button or set one in config.cfg.",
                                 "bHapticsRelay", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -520,6 +618,8 @@ namespace bHapticsRelay
 
         private void StartWebSocket()
         {
+            if (_wsServer != null) return;
+
             if (_port == 0)
             {
                 MessageBox.Show("WebSocket mode enabled but Port = 0.\nSet a valid port in config.cfg.",
@@ -532,20 +632,22 @@ namespace bHapticsRelay
                 _wsServer = new WebSocketServer($"ws://0.0.0.0:{_port}");
                 _wsServer.Start(sock =>
                 {
-                    _clients.Add(sock);
-                    // Dispatcher.Invoke(UpdateWsClientsCount);  // UpdateWsClientsCount calls Dispatcher.Invoke
+                    // assign an id for this connection so we can remove it exactly later
+                    var connId = Guid.NewGuid();
+                    _clients[connId] = sock;
                     UpdateWsClientsCount();
 
-                    sock.OnOpen = () => Log.Information("WS client connected");
+                    sock.OnOpen = () => Log.Information("WS client connected: {ConnId}", connId);
                     sock.OnClose = () =>
                     {
-                        Log.Information("WS client disconnected");
-                        _clients.TryTake(out _);
-                        // Dispatcher.Invoke(UpdateWsClientsCount);  // UpdateWsClientsCount calls Dispatcher.Invoke
+                        Log.Information("WS client disconnected: {ConnId}", connId);
+                        // remove the exact client
+                        _clients.TryRemove(connId, out _);
                         UpdateWsClientsCount();
                     };
                     sock.OnMessage = msg => ProcessLine(msg, sock);
                 });
+
             }
             catch (Exception ex)
             {
@@ -562,11 +664,11 @@ namespace bHapticsRelay
         /// </summary>
         /// <param name="line">
         /// A comma‐delimited string where the first token is the method name and subsequent tokens
-        /// are its parameters (e.g. “play,Explosion” or “playDot,1,40,0;1;5”).
+        /// are its parameters (e.g. "play,Explosion" or "playDot,1,40,0;1;5").
         /// </param>
         private void ProcessLine(string line, IWebSocketConnection? sock = null)
         {
-            var parts = line.Split(',');
+            var parts = SplitCsv(line);
 
             // ignore blank lines / whitespace
             if (parts.Length == 0 || string.IsNullOrWhiteSpace(parts[0]))
@@ -580,56 +682,36 @@ namespace bHapticsRelay
                 LastCommandText.Text = $"Last command: {line.Trim()}";
             });
 
+            // Check parameters and ensure requirements are met
+            if (!CheckMinParams(parts, sock, line))
+            {
+                // CheckMinParams will send ERR:invalid_params if needed
+                return;
+            }
+
             try
             {
                 switch (parts[0])
                 {
-                    // play(string key)
-                    //   Plays a pre-defined haptic event by key/name.
+                    // play(string eventId)
+                    //   Plays a pre-defined haptic event by eventId/name.
                     // Parameters:
-                    //   string key         Identifier for the haptic pattern (event key).
+                    //   string eventId         Identifier for the haptic pattern (eventId).
                     // Returns:
                     //   int                Request ID (>0) if playback started; otherwise, negative or zero.
                     // Example:
-                    //   play,Explosion     ⇒ Log.Debug("play({Key}) => requestId {Req}", "Explosion", req);
+                    //   play,Explosion     ⇒ Log.Debug("play({eventId}) => requestId {Req}", "Explosion", req);
                     case "play":
                         int req = BhapticsSDK2Wrapper.play(parts[1]);
-                        Log.Debug("play({Key}) => requestId {Req}", parts[1], req);
+                        Log.Debug("play({eventId}) => requestId {Req}", parts[1], req);
                         sock?.Send(req.ToString());  // websocket reply if needed
                         break;
 
-                    // playPos(string key, int position)
-                    //   Legacy overload: plays a haptic pattern using only the position index.
+                    // playParam(string eventId, int reqId, float intensity, float duration, float angleX, float offsetY)
+                    //   Plays a pattern with custom parameters.
                     // Parameters:
-                    //   string key         Identifier for the haptic pattern.
-                    //   int    position    Device position index.
-                    // Returns:
-                    //   int                Request ID (>0) if playback started; otherwise, negative or zero.
-                    // Example:
-                    //   playPos,HeartBeat,1 ⇒ Log.Debug("playPos({Key},{Pos}) => requestId {Req}", "HeartBeat", 1, posReq);
-                    case "playPos":
-                        if (parts.Length < 3)
-                        {
-                            Log.Warning("playPos needs 2 params (key,position): {Line}", line);
-                            sock?.Send("ERR:invalid_params");
-                            break;
-                        }
-                        if (!int.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out int posIdx))
-                        {
-                            Log.Warning("playPos invalid position: {Line}", line);
-                            sock?.Send("ERR:bad_number");
-                            break;
-                        }
-                        int posReq = BhapticsSDK2Wrapper.playPos(parts[1], posIdx);
-                        Log.Debug("playPos({Key},{Pos}) => requestId {Req}", parts[1], parts[2], posReq);
-                        sock?.Send(posReq.ToString());  // websocket reply if needed
-                        break;
-
-                    // playPosParam(string key, int position, float intensity, float duration, float angleX, float offsetY)
-                    //   Plays a pattern at a specific position with custom parameters.
-                    // Parameters:
-                    //   string key         Identifier for the haptic pattern.
-                    //   int    position    Device position index.
+                    //   string eventId     Identifier for the haptic pattern.
+                    //   int    reqId       Request ID (or 0 to auto-generate).
                     //   float  intensity   Intensity multiplier (0.0–1.0).
                     //   float  duration    Duration multiplier (seconds).
                     //   float  angleX      Rotation angle around X axis (spatial mapping).
@@ -637,60 +719,76 @@ namespace bHapticsRelay
                     // Returns:
                     //   int                Request ID (>0) if playback started; otherwise, negative or zero.
                     // Example:
-                    //   playPosParam,Bump,2,0.8,1.2,45,10
-                    case "playPosParam":
+                    //   playParam,Bump,1234,0.8,1.2,45,10
+                    case "playParam":
                         if (parts.Length < 7)
                         {
-                            Log.Warning("playPosParam needs 6 params (key,pos,intensity,duration,angleX,offsetY): {Line}", line);
+                            Log.Warning("playParam needs 6 params (eventId,reqId,intensity,duration,angleX,offsetY): {Line}", line);
                             sock?.Send("ERR:invalid_params");
                             break;
                         }
-                        if (!int.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out int ppPos) ||
+                        if (!int.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out int ppReq) ||
                             !float.TryParse(parts[3], NumberStyles.Any, CultureInfo.InvariantCulture, out float ppInt) ||
                             !float.TryParse(parts[4], NumberStyles.Any, CultureInfo.InvariantCulture, out float ppDur) ||
                             !float.TryParse(parts[5], NumberStyles.Any, CultureInfo.InvariantCulture, out float ppAng) ||
                             !float.TryParse(parts[6], NumberStyles.Any, CultureInfo.InvariantCulture, out float ppOff))
                         {
-                            Log.Warning("playPosParam bad numeric param: {Line}", line);
+                            Log.Warning("playParam bad numeric param: {Line}", line);
                             sock?.Send("ERR:bad_number");
                             break;
                         }
-                        int posParamReq = BhapticsSDK2Wrapper.playPosParam(parts[1], ppPos, ppInt, ppDur, ppAng, ppOff);
-                        Log.Debug("playPosParam({Key},{Pos},{Int},{Dur},{Ang},{Off}) => requestId {Req}",
-                                  parts[1], ppPos, ppInt, ppDur, ppAng, ppOff, posParamReq);
-                        sock?.Send(posParamReq.ToString());
+                        // If caller passed 0, auto-generate a request id for tracking.
+                        int ppReqId = ppReq > 0 ? ppReq : NextRequestId();
+                        int ppOut = BhapticsSDK2Wrapper.playParam(parts[1], ppReqId, ppInt, ppDur, ppAng, ppOff);
+                        Log.Debug("playParam({eventId},{Req},{Int},{Dur},{Ang},{Off}) => requestId {ReqOut}",
+                                  parts[1], ppReqId, ppInt, ppDur, ppAng, ppOff, ppOut);
+                        sock?.Send(ppOut.ToString());
                         break;
 
-                    // playGlove(string key, int timeout)
-                    //   Plays a haptic pattern on a glove device (haptic glove support).
+                    // playWithStartTime(string eventId, int reqId, int startMillis, float intensity, float duration, float angleX, float offsetY)
+                    //   Plays a haptic pattern starting at a specific time offset, with custom parameters.
                     // Parameters:
-                    //   string key         Identifier for the haptic pattern.
-                    //   int    timeout     Timeout in milliseconds for glove response.
+                    //   string eventId     Identifier for the haptic pattern.
+                    //   int    reqId       Request ID (or 0 to auto-generate).
+                    //   int    startMillis Start offset in milliseconds from the beginning of the pattern.
+                    //   float  intensity   Intensity multiplier (0.0–1.0).
+                    //   float  duration    Duration multiplier (seconds).
+                    //   float  angleX      Rotation angle around X axis.
+                    //   float  offsetY     Vertical offset.
                     // Returns:
-                    //   int                Request ID (>0) if playback started; otherwise, negative or zero.
+                    //   int                Request ID (same as passed or generated). Native method returns void; we return the request id for convenience.
                     // Example:
-                    //   playGlove,GripPulse,500 ⇒ Log.Debug("playGlove({Key},{Timeout}) => requestId {Req}", "GripPulse", 500, gloveReq);
-                    case "playGlove":
-                        if (parts.Length < 3)
+                    //   playWithStartTime,Bump,1234,250,0.8,1.2,45,10
+                    case "playWithStartTime":
+                        if (parts.Length < 8)
                         {
-                            Log.Warning("playGlove needs 2 params (key,timeoutMs): {Line}", line);
+                            Log.Warning("playWithStartTime needs 7 params (eventId,reqId,startMillis,intensity,duration,angleX,offsetY): {Line}", line);
                             sock?.Send("ERR:invalid_params");
                             break;
                         }
-                        if (!int.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out int gloveTimeout))
+                        if (!int.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out int pwReq) ||
+                            !int.TryParse(parts[3], NumberStyles.Any, CultureInfo.InvariantCulture, out int startMillis) ||
+                            !float.TryParse(parts[4], NumberStyles.Any, CultureInfo.InvariantCulture, out float pwInt) ||
+                            !float.TryParse(parts[5], NumberStyles.Any, CultureInfo.InvariantCulture, out float pwDur) ||
+                            !float.TryParse(parts[6], NumberStyles.Any, CultureInfo.InvariantCulture, out float pwAng) ||
+                            !float.TryParse(parts[7], NumberStyles.Any, CultureInfo.InvariantCulture, out float pwOff))
                         {
-                            Log.Warning("playGlove bad timeout value: {Line}", line);
+                            Log.Warning("playWithStartTime bad numeric param: {Line}", line);
                             sock?.Send("ERR:bad_number");
                             break;
                         }
-                        int gloveReq = BhapticsSDK2Wrapper.playGlove(parts[1], gloveTimeout);
-                        Log.Debug("playGlove({Key},{Timeout}) => requestId {Req}", parts[1], gloveTimeout, gloveReq);
-                        sock?.Send(gloveReq.ToString());
+                        // If caller passed 0, auto-generate a request id for tracking.
+                        int pwReqId = pwReq > 0 ? pwReq : NextRequestId();
+                        BhapticsSDK2Wrapper.playWithStartTime(parts[1], pwReqId, startMillis, pwInt, pwDur, pwAng, pwOff);
+                        Log.Debug("playWithStartTime({eventId},{Req},{StartMs},{Int},{Dur},{Ang},{Off}) issued.",
+                                  parts[1], pwReqId, startMillis, pwInt, pwDur, pwAng, pwOff);
+                        sock?.Send(pwReqId.ToString());
                         break;
 
-                    // playDot(int position, int durationMillis, int[] motors, int size)
+                    // playDot(int reqId, int position, int durationMillis, int[] motors, int size)
                     //   Plays a dot pattern: activates specific motors for a given duration.
                     // Parameters:
+                    //   int    reqId           Request ID (or 0 to auto-generate).
                     //   int    position        Device position index.
                     //   int    durationMillis  Duration of each dot in ms.
                     //   int[]  motors          Array of motor indices to activate.
@@ -698,7 +796,7 @@ namespace bHapticsRelay
                     // Returns:
                     //   int                   Request ID (>0) if playback started; otherwise, negative or zero.
                     // Example:
-                    //   playDot,1,40,0;1;5;7 ⇒ motors={0,1,5,7}
+                    //   playDot,1234,1,40,0;1;5;7 ⇒ motors={0,1,5,7}
                     case "playDot":
                         if (parts.Length < 4)
                         {
@@ -729,14 +827,16 @@ namespace bHapticsRelay
                             sock?.Send("ERR:bad_number");
                             break;
                         }
-                        int dotReq = BhapticsSDK2Wrapper.playDot(dotPos, dotDur, motorsArr, motorsArr.Length);
+                        int dotReqId = NextRequestId();
+                        int dotReq = BhapticsSDK2Wrapper.playDot(dotReqId, dotPos, dotDur, motorsArr, motorsArr.Length);
                         Log.Debug("playDot pos={Pos} motors={Count} => requestId {Req}", dotPos, motorsArr.Length, dotReq);
                         sock?.Send(dotReq.ToString());
                         break;
 
-                    // playWaveform(int position, int[] motorValues, int[] playTimeValues, int[] shapeValues, int motorLen)
+                    // playWaveform(int requestId, int position, int[] motorValues, int[] playTimeValues, int[] shapeValues, int motorLen)
                     //   Plays a waveform pattern by specifying motor intensities and timing.
                     // Parameters:
+                    //   int    requestId       Request ID (or 0 to auto-generate).
                     //   int    position        Device position index.
                     //   int[]  motorValues     Array of intensity values per motor.
                     //   int[]  playTimeValues  Array of play durations per motor.
@@ -745,20 +845,25 @@ namespace bHapticsRelay
                     // Returns:
                     //   int                   Request ID (>0) if playback started; otherwise, negative or zero.
                     // Example:
-                    //   playWaveform,2,100;80;60,10;10;10,0;0;0
+                    //   playWaveform,1234,2,100;80;60,10;10;10,0;0;0
                     case "playWaveform":
-                        if (parts.Length < 5)
+                        if (parts.Length != 6)
                         {
-                            Log.Warning("playWaveform needs 4 array params: {Line}", line);
+                            Log.Warning("playWaveform requires exactly 5 params: {Line}", line);
                             sock?.Send("ERR:invalid_params");
                             break;
                         }
-                        if (!int.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out int wfPos))
+
+                        // Parse reqId and position
+                        if (!int.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out int wfReqId) ||
+                            !int.TryParse(parts[2], NumberStyles.Any, CultureInfo.InvariantCulture, out int wfPos))
                         {
-                            Log.Warning("playWaveform bad position: {Line}", line);
+                            Log.Warning("playWaveform bad number for reqId or position: {Line}", line);
                             sock?.Send("ERR:bad_number");
                             break;
                         }
+
+                        // Helper to parse an int[] from a semicolon- or pipe-delimited string
                         bool TryParseIntArray(string s, out int[] arr)
                         {
                             var toks = s.Split(new[] { ';', '|' }, StringSplitOptions.RemoveEmptyEntries);
@@ -768,28 +873,53 @@ namespace bHapticsRelay
                                     return false;
                             return true;
                         }
-                        if (!TryParseIntArray(parts[2], out int[] motorVals) ||
-                            !TryParseIntArray(parts[3], out int[] playTimes) ||
-                            !TryParseIntArray(parts[4], out int[] shapeVals))
+
+                        // Parse the three arrays
+                        if (!TryParseIntArray(parts[3], out int[] motorVals) ||
+                            !TryParseIntArray(parts[4], out int[] playTimes) ||
+                            !TryParseIntArray(parts[5], out int[] shapeVals))
                         {
                             Log.Warning("playWaveform bad array element: {Line}", line);
                             sock?.Send("ERR:bad_number");
                             break;
                         }
-                        if (motorVals.Length != playTimes.Length || playTimes.Length != shapeVals.Length)
+
+                        // Ensure non-empty and matching lengths
+                        if (motorVals.Length == 0 ||
+                            motorVals.Length != playTimes.Length ||
+                            playTimes.Length != shapeVals.Length)
                         {
-                            Log.Warning("playWaveform array length mismatch: {Line}", line);
+                            Log.Warning("playWaveform array length error: {Line}", line);
                             sock?.Send("ERR:length_mismatch");
                             break;
                         }
-                        int wfReq = BhapticsSDK2Wrapper.playWaveform(wfPos, motorVals, playTimes, shapeVals, motorVals.Length);
-                        Log.Debug("playWaveform pos={Pos} len={Len} => requestId {Req}", wfPos, motorVals.Length, wfReq);
+
+                        // Safe to call native
+                        int wfReq;
+                        try
+                        {
+                            wfReq = BhapticsSDK2Wrapper.playWaveform(
+                                wfReqId, wfPos,
+                                motorVals, playTimes, shapeVals,
+                                motorVals.Length
+                            );
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "playWaveform threw exception: {Line}", line);
+                            sock?.Send("ERR:exception");
+                            break;
+                        }
+
+                        Log.Debug("playWaveform req={ReqId} pos={Pos} len={Len} => {NativeReq}",
+                            wfReqId, wfPos, motorVals.Length, wfReq);
                         sock?.Send(wfReq.ToString());
                         break;
 
-                    // playPath(int position, float[] xValues, float[] yValues, int[] intensityValues, int Len)
+                    // playPath(int reqId, int position, float[] xValues, float[] yValues, int[] intensityValues, int Len)
                     //   Plays a path-based haptic effect using X/Y coordinates and intensities.
                     // Parameters:
+                    //   int      reqId           Request ID (or 0 to auto-generate).
                     //   int      position        Device position index.
                     //   float[]  xValues         Array of X-axis coordinates.
                     //   float[]  yValues         Array of Y-axis coordinates.
@@ -798,7 +928,7 @@ namespace bHapticsRelay
                     // Returns:
                     //   int                     Request ID (>0) if playback started; otherwise, negative or zero.
                     // Example:
-                    //   playPath,3,0.1;0.5;0.8,0.0;0.2;0.4,30;60;90
+                    //   playPath,1234,3,0.1;0.5;0.8,0.0;0.2;0.4,30;60;90
                     case "playPath":
                         if (parts.Length < 5)
                         {
@@ -835,15 +965,17 @@ namespace bHapticsRelay
                             sock?.Send("ERR:length_mismatch");
                             break;
                         }
-                        int pathReq = BhapticsSDK2Wrapper.playPath(pathPos, xs, ys, ints, xs.Length);
+                        int pathReqId = NextRequestId();
+                        int pathReq = BhapticsSDK2Wrapper.playPath(pathReqId, pathPos, xs, ys, ints, xs.Length);
                         Log.Debug("playPath pos={Pos} pts={Len} => requestId {Req}", pathPos, xs.Length, pathReq);
                         sock?.Send(pathReq.ToString());
                         break;
 
-                    // playLoop(string key, float intensity, float duration, float angleX, float offsetY, int interval, int maxCount)
+                    // playLoop(string eventId, int reqId, float intensity, float duration, float angleX, float offsetY, int interval, int maxCount)
                     //   Plays a looping haptic pattern with interval and max loop count.
                     // Parameters:
-                    //   string key         Identifier for the haptic pattern.
+                    //   string eventId     Identifier for the haptic pattern.
+                    //   int    reqId       Request ID (or 0 to auto-generate).
                     //   float  intensity   Intensity multiplier (0.0–1.0).
                     //   float  duration    Duration multiplier (seconds).
                     //   float  angleX      Rotation angle around X axis.
@@ -853,11 +985,11 @@ namespace bHapticsRelay
                     // Returns:
                     //   int               Request ID (>0) if playback started; otherwise, negative or zero.
                     // Example:
-                    //   playLoop,Pulse,1.0,0.5,0,0,200,0
+                    //   playLoop,Pulse,1234,1.0,0.5,0,0,200,0
                     case "playLoop":
                         if (parts.Length < 8)
                         {
-                            Log.Warning("playLoop needs 7 params (key,intensity,duration,angleX,offsetY,interval,maxCount): {Line}", line);
+                            Log.Warning("playLoop needs 7 params (eventId,intensity,duration,angleX,offsetY,interval,maxCount): {Line}", line);
                             sock?.Send("ERR:invalid_params");
                             break;
                         }
@@ -872,36 +1004,58 @@ namespace bHapticsRelay
                             sock?.Send("ERR:bad_number");
                             break;
                         }
-                        int loopReq = BhapticsSDK2Wrapper.playLoop(parts[1], lpInt, lpDur, lpAng, lpOff, lpIntv, lpCnt);
-                        Log.Debug("playLoop({Key}) => requestId {Req}", parts[1], loopReq);
+                        int loopReqId = NextRequestId();
+                        int loopReq = BhapticsSDK2Wrapper.playLoop(parts[1], loopReqId, lpInt, lpDur, lpAng, lpOff, lpIntv, lpCnt);
+                        Log.Debug("playLoop({eventId}) => requestId {Req}", parts[1], loopReq);
                         sock?.Send(loopReq.ToString());
                         break;
 
-                    // playWithoutResult(string key)
-                    //   Plays a pattern without returning a result code (fire-and-forget).
+                    // pause(string eventId)
+                    //   Pauses a specific haptic playback by event ID.
                     // Parameters:
-                    //   string key         Identifier for the haptic pattern.
+                    //   string eventId    Identifier for the haptic pattern.
                     // Returns:
-                    //   void
+                    //   int               Status or remaining time depending on native implementation.
                     // Example:
-                    //   playWithoutResult,Click
-                    case "playWithoutResult":
+                    //   pause,Pulse
+                    case "pause":
                         if (parts.Length < 2)
                         {
-                            Log.Warning("playWithoutResult needs key param: {Line}", line);
+                            Log.Warning("pause needs eventId param: {Line}", line);
                             sock?.Send("ERR:invalid_params");
                             break;
                         }
-                        BhapticsSDK2Wrapper.playWithoutResult(parts[1]);
-                        sock?.Send("playWithoutResult sent");
+                        int pauseEvt = BhapticsSDK2Wrapper.pause(parts[1]);
+                        Log.Debug("pause({eventId}) => {Res}", parts[1], pauseEvt);
+                        sock?.Send(pauseEvt.ToString());  // websocket reply if needed
                         break;
 
-                    // stop(int key)
+                    // resume(string eventId)
+                    //   Resumes a specific haptic playback by event ID.
+                    // Parameters:
+                    //   resume eventId     Identifier for the haptic pattern.
+                    // Returns:
+                    //   bool               True if playback paused; otherwise, false.
+                    // Example:
+                    //   pause,Pulse
+                    case "resume":
+                        if (parts.Length < 2)
+                        {
+                            Log.Warning("resume needs eventId param: {Line}", line);
+                            sock?.Send("ERR:invalid_params");
+                            break;
+                        }
+                        bool resumeEvt = BhapticsSDK2Wrapper.resume(parts[1]);
+                        Log.Debug("resume({eventId}) => {Res}", parts[1], resumeEvt);
+                        sock?.Send(resumeEvt.ToString());  // websocket reply if needed
+                        break;
+
+                    // stop(int reqId)
                     //   Stops a specific haptic playback by request ID.
                     // Parameters:
-                    //   int key            Request ID returned from play/playPosParam.
+                    //   int reqId        Request ID returned from play/playPosParam.
                     // Returns:
-                    //   bool               True if playback stopped; otherwise, false.
+                    //   bool             True if playback stopped; otherwise, false.
                     // Example:
                     //   stop,1234
                     case "stop":
@@ -918,12 +1072,13 @@ namespace bHapticsRelay
                             break;
                         }
                         BhapticsSDK2Wrapper.stop(stopReqId);
+                        ReplyOk(sock);
                         break;
 
                     // stopByEventId(string eventId)
-                    //   Stops playback of a haptic event by its event key.
+                    //   Stops playback of a haptic event by its event eventId.
                     // Parameters:
-                    //   string eventId     Event key/name to stop.
+                    //   string eventId     Event eventId/name to stop.
                     // Returns:
                     //   bool               True if playback stopped; otherwise, false.
                     // Example:
@@ -931,12 +1086,12 @@ namespace bHapticsRelay
                     case "stopByEventId":
                         if (parts.Length < 2)
                         {
-                            Log.Warning("stopByEventId needs key param: {Line}", line);
+                            Log.Warning("stopByEventId needs eventId param: {Line}", line);
                             sock?.Send("ERR:invalid_params");
                             break;
                         }
                         bool stoppedEvt = BhapticsSDK2Wrapper.stopByEventId(parts[1]);
-                        Log.Debug("stopByEventId({Key}) => {Res}", parts[1], stoppedEvt);
+                        Log.Debug("stopByEventId({eventId}) => {Res}", parts[1], stoppedEvt);
                         sock?.Send(stoppedEvt.ToString());  // websocket reply if needed
                         break;
 
@@ -950,6 +1105,7 @@ namespace bHapticsRelay
                     //   stopAll
                     case "stopAll":
                         BhapticsSDK2Wrapper.stopAll();
+                        ReplyOk(sock);
                         break;
 
                     // isPlaying()
@@ -966,10 +1122,10 @@ namespace bHapticsRelay
                         sock?.Send(playing.ToString());  // websocket reply if needed
                         break;
 
-                    // isPlayingByRequestId(int key)
+                    // isPlayingByRequestId(int requestId)
                     //   Checks if a specific request ID is still playing.
                     // Parameters:
-                    //   int key            Request ID to query.
+                    //   int requestId      Request ID to query.
                     // Returns:
                     //   bool               True if still playing; otherwise, false.
                     // Example:
@@ -993,9 +1149,9 @@ namespace bHapticsRelay
                         break;
 
                     // isPlayingByEventId(string eventId)
-                    //   Checks if a haptic event identified by key is playing.
+                    //   Checks if a haptic event identified by eventId is playing.
                     // Parameters:
-                    //   string eventId     Event key/name to query.
+                    //   string eventId     Event eventId/name to query.
                     // Returns:
                     //   bool               True if still playing; otherwise, false.
                     // Example:
@@ -1003,12 +1159,12 @@ namespace bHapticsRelay
                     case "isPlayingByEventId":
                         if (parts.Length < 2)
                         {
-                            Log.Warning("isPlayingByEventId needs key param: {Line}", line);
+                            Log.Warning("isPlayingByEventId needs eventId param: {Line}", line);
                             sock?.Send("ERR:invalid_params");
                             break;
                         }
                         bool byEvt = BhapticsSDK2Wrapper.isPlayingByEventId(parts[1]);
-                        Log.Information("isPlayingByEventId({Key}) => {Res}", parts[1], byEvt);
+                        Log.Information("isPlayingByEventId({eventId}) => {Res}", parts[1], byEvt);
                         sock?.Send(byEvt.ToString());  // websocket reply if needed
                         break;
 
@@ -1171,64 +1327,31 @@ namespace bHapticsRelay
                         sock?.Send(launchRes.ToString());
                         break;
 
-                    // bHapticsGetHapticMessage(int lastVersion?)
-                    //   Fetches new haptic messages from the server.
-                    // Parameters (optional):
-                    //   int lastVersion  Last version number received (-1 to fetch all).
-                    // Returns:
-                    //   string           "<status> <json>" – status code followed by JSON payload.
-                    // Example:
-                    //   bHapticsGetHapticMessage,-1
-                    case "bHapticsGetHapticMessage":
-                        {
-                            int lastVer = -1;
-                            if (parts.Length >= 2 && !int.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out lastVer))
-                            {
-                                Log.Warning("bHapticsGetHapticMessage invalid version: {Line}", line);
-                                sock?.Send("ERR:bad_number");
-                                break;
-                            }
-                            int status;
-                            IntPtr ptr = BhapticsSDK2Wrapper.bHapticsGetHapticMessage(
-                                _apiKey!, _appId!, lastVer, out status);
-                            string json = PtrToUtf8(ptr);
-                            Log.Debug("bHapticsGetHapticMessage: status {Status}, payload: {Json}", status, json);
-                            sock?.Send($"{status} {json}");
-                            break;
-                        }
-
-                    // bHapticsGetHapticMappings(string apiKey, string appId, int lastVersion, out int status)
-                    //   Retrieves custom haptic event mappings from the bHaptics server for the given application.
+                    // getHapticMappingsJson()
+                    //   Retrieves the full JSON payload of haptic mappings from the native library.
+                    //   Replaces legacy networked retrieval functions.
                     // Parameters:
-                    //   string apiKey      User’s bHaptics API key.
-                    //   string appId       Application identifier.
-                    //   int    lastVersion Version number of the last mapping received (use -1 to fetch all).
-                    //   out int status     Output status code from the server.
+                    //   none
                     // Returns:
-                    //   IntPtr             Pointer to a null-terminated UTF8 JSON string containing new mappings.
+                    //   IntPtr             Pointer to a null-terminated C string containing all mappings in JSON format.
                     // Example:
-                    //   bHapticsGetHapticMappings,myKey,myApp,-1,out status ⇒ ptr  
+                    //   bHapticsGetHapticMappings ⇒ ptr  
                     //   string json = PtrToUtf8(ptr);  
-                    //   Log.Debug("bHapticsGetHapticMappings: status {Status}, payload: {Json}", status, json);
+                    //   Log.Debug("bHapticsGetHapticMappings: payload: {Json}", json);
                     case "bHapticsGetHapticMappings":
                         {
-                            int status;
-                            IntPtr ptr = BhapticsSDK2Wrapper.bHapticsGetHapticMappings(
-                                _apiKey!,
-                                _appId!,
-                                -1,      // lastVersion = -1 to get all
-                                out status);
+                            IntPtr ptr = BhapticsSDK2Wrapper.getHapticMappingsJson();
 
                             string json = PtrToUtf8(ptr);
-                            Log.Debug("bHapticsGetHapticMappings: status {Status}, payload: {Json}", status, json);
-                            sock?.Send(status.ToString() + " " + json.ToString());  // websocket reply if needed
+                            Log.Debug("bHapticsGetHapticMappings: payload: {Json}", json);
+                            sock?.Send(json);  // websocket reply if needed
                             break;
                         }
 
                     // getEventTime(string eventId)
                     //   Retrieves timing metadata (e.g., duration) for a specific event.
                     // Parameters:
-                    //   string eventId   Event key/name.
+                    //   string eventId   Event eventId/name.
                     // Returns:
                     //   int              Timing information (implementation-defined).
                     // Example:
@@ -1241,7 +1364,7 @@ namespace bHapticsRelay
                             break;
                         }
                         int evtTime = BhapticsSDK2Wrapper.getEventTime(parts[1]);
-                        Log.Information("getEventTime({Key}) => {Time}", parts[1], evtTime);
+                        Log.Information("getEventTime({eventId}) => {Time}", parts[1], evtTime);
                         sock?.Send(evtTime.ToString());
                         break;
 
@@ -1277,6 +1400,60 @@ namespace bHapticsRelay
             }
         }
 
+        // Function to check minimum params required per command
+        private bool CheckMinParams(string[] parts, IWebSocketConnection? sock, string line)
+        {
+            if (parts.Length == 0 || string.IsNullOrWhiteSpace(parts[0]))
+                return true;
+
+            if (_minParams.TryGetValue(parts[0], out int minRequired))
+            {
+                // parts.Length - 1 is the count of tokens after command
+                if (parts.Length - 1 < minRequired)
+                {
+                    Log.Warning("{Cmd} needs at least {Min} param(s): {Line}", parts[0], minRequired, line);
+                    sock?.Send("ERR:invalid_params");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+
+        // Minimum number of parameters (excluding the command token) required per command.
+        // e.g. {"play", 1} => expects at least one token after "play" (parts[1]).
+        private static readonly Dictionary<string, int> _minParams = new(StringComparer.OrdinalIgnoreCase)
+        {
+            {"play", 1},
+            {"playParam", 6},
+            {"playWithStartTime", 7},
+            {"playDot", 3},
+            {"playWaveform", 5},
+            {"playPath", 4},
+            {"playLoop", 7},
+            {"pause", 1},
+            {"resume", 1},
+            {"stop", 1},
+            {"stopByEventId", 1},
+            {"isPlayingByRequestId", 1},
+            {"isPlayingByEventId", 1},
+            {"isbHapticsConnected", 1},
+            {"ping", 1},
+            {"swapPosition", 1},
+            {"launchPlayer", 1},
+            {"getEventTime", 1},
+            // commands with 0 params to keep intent clear:
+            {"isPlaying", 0},
+            {"pingAll", 0},
+            {"getDeviceInfoJson", 0},
+            {"isPlayerInstalled", 0},
+            {"isPlayerRunning", 0},
+            {"stopAll", 0},
+            {"getHapticMappingsJson", 0},
+            {"bHapticsGetHapticMappings", 0}
+        };
+
         private void TestButton_Click(object sender, RoutedEventArgs e)
         {
             if (_testEvent == null) return;
@@ -1291,6 +1468,7 @@ namespace bHapticsRelay
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            _lifecycleCts?.Cancel();
             Dispose();
             Application.Current.Shutdown();
         }
@@ -1308,8 +1486,22 @@ namespace bHapticsRelay
 
                 _watcher?.Dispose();
 
-                BhapticsSDK2Wrapper.wsClose();   // close native WS first
+                // Clean up websocket clients
+                BhapticsSDK2Wrapper.wsClose();   // close connection to bHaptics Player
+
+                // Close any connected WebSocket clients we started
+                try
+                {
+                    CloseAllWebSocketClients();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Error while closing WS clients");
+                }
+
                 _wsServer?.Dispose();
+
+                _lifecycleCts?.Cancel();
 
                 _statusTimer?.Stop();
                 _statusTimer?.Dispose();
@@ -1322,14 +1514,61 @@ namespace bHapticsRelay
         }
         #endregion
 
+
+        // Regex for matching [bHaptics] commands in log files
+        private static readonly Regex _bhTag =
+            new Regex(@"\[bHaptics\]\s*(.*)", RegexOptions.Compiled);
+
         // Helper functions
 
-        // If Default Config is used (offline mode), disable validation of the blob so the player will accept it
-       static string PrepareOfflineJson(string json)
+        /// <summary>
+        /// Startup async helper
+        /// </summary>
+        private static async Task<bool> WaitUntilAsync(Func<bool> probe, TimeSpan timeout, TimeSpan poll, CancellationToken ct)
         {
-            var doc = JsonNode.Parse(json)!.AsObject();
-            doc["disableValidation"] = true;
-            return doc.ToJsonString();
+            var stop = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < stop && !ct.IsCancellationRequested)
+            {
+                if (probe()) return true;
+                await Task.Delay(poll, ct).ConfigureAwait(false);
+            }
+            return probe();
+        }
+
+        /// <summary>
+        /// Set disableValidation = true in the Json so the player will accept it.
+        /// </summary>
+        static string PrepareOfflineJson(string json)
+        {
+            try
+            {
+                var node = JsonNode.Parse(json);
+                if (node is JsonObject obj)
+                {
+                    // If it's present but not bool true, force to true; otherwise add it.
+                    if (obj.TryGetPropertyValue("disableValidation", out var existing))
+                    {
+                        if (existing is not JsonValue jv || !jv.TryGetValue<bool>(out var b) || b == false)
+                        {
+                            obj["disableValidation"] = true;
+                        }
+                    }
+                    else
+                    {
+                        obj["disableValidation"] = true;
+                    }
+
+                    return obj.ToJsonString();
+                }
+
+                Log.Warning("PrepareOfflineJson: JSON root is not an object; leaving JSON unchanged.");
+                return json;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "PrepareOfflineJson: failed to parse JSON; leaving it unchanged.");
+                return json;
+            }
         }
 
         /// <summary>
@@ -1350,21 +1589,107 @@ namespace bHapticsRelay
             return Encoding.UTF8.GetString(buffer);
         }
 
-        // Regex for matching [bHaptics] commands in log files
-        private static readonly Regex _bhTag =
-            new Regex(@"\[bHaptics\]\s*(.*)", RegexOptions.Compiled);
+        /// <summary>
+        /// Minimal CSV splitter that respects double quotes and double-quote escaping.
+        /// </summary>
+        /// <param name="input"></param>
+        /// <returns></returns>
+        private static string[] SplitCsv(string input)
+        {
+            var result = new List<string>();
+            var sb = new StringBuilder();
+            bool inQuotes = false;
 
-        // ---------- safe-parse helpers ----------
-        private static bool TryParseInt(string s, out int v) =>
-            int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out v);
+            for (int i = 0; i < input.Length; i++)
+            {
+                char c = input[i];
 
-        private static bool TryParseFloat(string s, out float v) =>
-            float.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out v);
+                if (c == '"')
+                {
+                    // Escaped double quote inside quoted field ("")
+                    if (inQuotes && i + 1 < input.Length && input[i + 1] == '"')
+                    {
+                        sb.Append('"');
+                        i++;
+                    }
+                    else
+                    {
+                        inQuotes = !inQuotes;
+                    }
+                }
+                else if (c == ',' && !inQuotes)
+                {
+                    result.Add(sb.ToString());
+                    sb.Clear();
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            result.Add(sb.ToString());
 
+            // Trim and unquote each token
+            for (int j = 0; j < result.Count; j++)
+            {
+                var t = result[j].Trim();
+                if (t.Length >= 2 && t[0] == '"' && t[^1] == '"')
+                    t = t.Substring(1, t.Length - 2).Replace("\"\"", "\"");
+                result[j] = t;
+            }
+
+            return result.ToArray();
+        }
+
+
+        // Websocket helpers
+        /// <summary>
+        /// Sends OK reply to websocket.
+        /// </summary>
+        private static void ReplyOk(IWebSocketConnection? sock, string? payload = null)
+        {
+            if (sock == null) return;
+            sock.Send(string.IsNullOrEmpty(payload) ? "OK" : payload);
+        }
+
+        /// <summary>
+        /// Send ERR reply to websocket.
+        /// </summary>
+        /// <param name="sock"></param>
+        /// <param name="code"></param>
+        /// <param name="details"></param>
+        private static void ReplyErr(IWebSocketConnection? sock, string code, string? details = null)
+        {
+            if (sock == null) return;
+            sock.Send(string.IsNullOrWhiteSpace(details) ? $"ERR:{code}" : $"ERR:{code}:{details}");
+        }
+
+        /// <summary>
+        /// Closes all websockets connected by iterating _clients and gracefully closing them all.
+        /// </summary>
+        private void CloseAllWebSocketClients()
+        {
+            foreach (var kv in _clients.ToArray()) // snapshot to avoid collection-changed during iteration
+            {
+                try
+                {
+                    kv.Value?.Close(); // Fleck IWebSocketConnection.Close() should gracefully close the socket
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Error closing WS client {ConnId}", kv.Key);
+                }
+            }
+            _clients.Clear();
+        }
+
+        /// <summary>
+        /// Update the display number of websocket clients connected on the GUI (WsClientsText).
+        /// </summary>
         private void UpdateWsClientsCount()
         {
             int count = _clients.Count;
-            Dispatcher.Invoke(() => WsClientsText.Text = $"WS Clients Connected: {count}");
+            Dispatcher.BeginInvoke(() => WsClientsText.Text = $"WS Clients Connected: {count}");
         }
     }
 }

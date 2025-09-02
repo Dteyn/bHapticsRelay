@@ -1,4 +1,4 @@
-bHapticsRelay by Dteyn
+bHapticsRelay v0.3.0 by Dteyn
 https://github.com/Dteyn/bHapticsRelay
 
 Welcome to bHapticsRelay!

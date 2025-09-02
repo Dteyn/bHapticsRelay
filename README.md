@@ -1,9 +1,15 @@
 # bHapticsRelay
 
+![logo](/assets/bHapticsRelay-logo.jpg)
+
+![Latest release](https://img.shields.io/github/v/release/Dteyn/bHapticsRelay?include_prereleases)
+![Downloads](https://img.shields.io/github/downloads/Dteyn/bHapticsRelay/total)
+![Visitors](https://visitor-badge.laobi.icu/badge?page_id=Dteyn/bHapticsRelay)
+
 > [!WARNING]
 > This project is a **Work-In-Progress** and should be considered Early Access at this point. If you encounter any troubles, please open an Issue so the tool can be improved!
 
-![screenshot-v020-alpha](https://github.com/user-attachments/assets/d44ef6d2-26cb-4833-9720-f75c0588eedf)
+![screenshot-v030](/assets/screenshot-v030.jpg)
 
 ## Table of Contents
 
@@ -86,9 +92,9 @@ As long as you can make your game or mod write lines to a log file (or send webs
 No SDK integration needed - bHapticsRelay takes care of that for you!
 
 **Examples:**
-- OpenMW (Morrowind) mod prints `[bHaptics]play,MagicCast` to the game log when casting magic, triggering vest and sleeve effects.
-- A driving game writes `[bHaptics]play,CarCrash` to game log when the car hits something, triggering vest vibrations.
-- An RPG game writes `play,HeartBeat` over websocket when player is low on health.
+- OpenMW (Morrowind) mod prints `[bHaptics]play,magic_cast` to the game log when casting magic, triggering vest and sleeve effects.
+- A driving game writes `[bHaptics]play,car_crash` to game log when the car hits something, triggering vest vibrations.
+- An RPG game writes `play,heartbeat` over websocket when player is low on health.
 
 In each of these cases, bHapticsRelay will forward these events to the bHaptics Player.
 
@@ -111,7 +117,7 @@ bHapticsRelay uses the newer **bHaptics SDK version 2** which provides some new 
 
 New features in SDK2 include (but are not limited to):
 
-- New playback methods such as `playLoop`, `playPosParam`, `playGlove` and `playWaveform` which allow for finer control of haptic feedback compared to SDK1.
+- New playback methods such as `playLoop`, `playParam`, and `playWaveform` which allow for greater control of haptic feedback compared to SDK1.
 
 - Functions for getting device information and status, devices connected, as well as player application management (check if player is installed / running, launch player).
 
@@ -121,7 +127,7 @@ I've also included a full [**bHaptics SDK2 API reference**](https://github.com/D
 
 # General Overview
 
-**bHapticsRelay** is meant as a tool for technical modders who want to add tactile feedback to games via mods or scripts. If you are comfortable editing config files and writing game scripts (ie. in Lua or similar) to output events, bHapticsRelay will allow you to trigger bHaptics feedback without writing a full plugin in C++.
+**bHapticsRelay** is meant as a tool for modders who want to add tactile feedback to games via mods or scripts. If you are comfortable editing config files and writing game scripts (ie. in Lua or similar) to output events, bHapticsRelay will allow you to trigger bHaptics feedback without writing a full plugin in C++.
 
 > [!NOTE]  
 > You are expected to be familiar with basic modding concepts and must have access to the bHaptics Developer tools (Designer and Developer Portal).
@@ -167,9 +173,11 @@ The general workflow of the application is:
 
 The WebSocket server also sends replies with return values, allowing for two-way communication with bHaptics Player. This is useful if the modding environment has networking support or if you prefer a direct programmatic approach instead of writing to a log file.
 
-**Haptic Event Dispatch**: Whether an event command comes from the tail log or the WebSocket, the relay handles it the same way: it parses the event name and any parameters and calls the appropriate bHaptics SDK function. Events are identified by their Event ID (a string name, like `HeartBeat`) which must match an event in your bHaptics app configuration in the Developer Portal.
+**Haptic Event Dispatch**: Whether an event command comes from the tail log or the WebSocket, the relay handles it the same way: it parses the event name and any parameters and calls the appropriate bHaptics SDK function. Events are identified by their Event ID (a string name, like `heartbeat`) which must match an event in your bHaptics app configuration in the Developer Portal.
 
 Modders can refer to the **bHaptics SDK2 API Reference** at the bottom of this document for details on all the commands supported, and how to use them.
+
+A [**Test Suite**](#test-suite) is also provided which allows modders to test bHapticsRelay and become familiar with the various functions that SDK2 offers.
 
 **Player Connection & Checks**: The relay continuously ensures it has a valid connection to bHaptics Player. If the Player isn't running or if the connection is lost, bHapticsRelay will log an error or attempt to reconnect.
 
@@ -196,9 +204,9 @@ In this mode, the relay continuously watches a specified log file. It specifical
 
 For example:
 
-`[bHaptics]play,Explosion`
+`[bHaptics]play,explosion`
 
-When bHapticsRelay sees a tagged entry in the log, it extracts the command immediately following `[bHaptics]` - in this case, `play,Explosion`.
+When bHapticsRelay sees a tagged entry in the log, it extracts the command immediately following `[bHaptics]` - in this case, `play,explosion`.
 
 > [!NOTE]  
 > In Log File Monitoring mode, bHapticsRelay processes the commands and sends them to bHaptics Player, but doesn't return or log any feedback about the result.
@@ -206,7 +214,7 @@ When bHapticsRelay sees a tagged entry in the log, it extracts the command immed
 ### WebSocket Server Mode
 In this mode, the relay can receive commands directly over WebSocket connections. In WebSocket mode, ***you do not need*** the `[bHaptics]` tag. Instead, you simply send commands directly, such as:
 
-`play,Explosion`
+`play,explosion`
 
 > [!TIP]
 > The WebSocket mode **does** send back results to the client after processing each command, letting you know immediately if your command succeeded or failed, or providing request ID's or data as requested.
@@ -292,7 +300,7 @@ Below is a breakdown of each setting, what it does, and some practical examples.
 
 
    * **What it does:** (Websocket mode only) Sets the TCP port for incoming command messages.
-   * **Valid values:** Any open port (we recommend using a dynamic/private range: `49152` - `65535`).
+   * **Valid values:** Any open port (recommended range: `49152` - `65535` for non-application specific ports).
    * **Use case:** If port `50451` is free:
 
    ```ini
@@ -321,7 +329,7 @@ Below is a breakdown of each setting, what it does, and some practical examples.
 
    * **What it does:** This is your 20-character API key from the bHaptics Developer Portal used to authenticate calls to the online API.
    * **Valid values:** 20-character string (e.g., `abcd1234efgh5678ijkl`).
-   * **Use case:** Copy it from your portal into:
+   * **Use case:** Copy from your portal section **Settings -> Application Information -> Latest API Key** and paste here:
 
    ```ini
    ApiKey=abcd1234efgh5678ijkl
@@ -331,7 +339,7 @@ Below is a breakdown of each setting, what it does, and some practical examples.
 
    * **What it does:** This is your 24-character deployment key or workspace ID from bHaptics Developer Portal.
    * **Valid values:** 24-character string (e.g., `1234567890abcdef12345678`).
-   * **Use case:** Paste the AppId you generated when you deployed:
+   * **Use case:** Copy from your portal section **Settings -> Application Information -> Application ID** and paste here:
 
    ```ini
    AppId=1234567890abcdef12345678
@@ -341,7 +349,7 @@ Below is a breakdown of each setting, what it does, and some practical examples.
 
    * **What it does:** Path to the offline configuration JSON to be used as a fallback if the bHaptics Player can't reach the API.
    * **Valid values:** A valid `DefaultConfig.json` file you've downloaded from the Developer Portal (click _Download Default Config_ link after Deployment)
-   * **Use case:** If you saved the JSON to your mod folder:
+   * **Use case:** If you saved the JSON to your mod folder, specify the filename here (you can name it anything you want):
 
    ```ini
    DefaultConfig=DefaultConfig.json
@@ -376,32 +384,15 @@ bHapticsRelay is standalone .NET 8 WPF app and does not require an installer. Pl
 You should have these files in your .zip package:
 
 ```
-bhaptics.ico
-bhaptics.png
 bhaptics_library.dll
-bHapticsRelay.deps.json
-bHapticsRelay.dll
 bHapticsRelay.exe
-bHapticsRelay.runtimeconfig.json
 config.cfg
-Fleck.dll
-Microsoft.Extensions.Configuration.Abstractions.dll
-Microsoft.Extensions.Configuration.dll
-Microsoft.Extensions.Configuration.FileExtensions.dll
-Microsoft.Extensions.Configuration.Ini.dll
-Microsoft.Extensions.FileProviders.Abstractions.dll
-Microsoft.Extensions.FileProviders.Physical.dll
-Microsoft.Extensions.FileSystemGlobbing.dll
-Microsoft.Extensions.Primitives.dll
-DefaultConfig.json (optional)
-Serilog.dll
-Serilog.Sinks.File.dll
+DefaultConfig.json
 LICENSE
-Readme.txt (attributions & credits - please don't omit!)
+Readme.txt (see note below)
 ```
 
-> [!NOTE]  
-> Only the Default Config JSON is optional; everything else is required for the relay to start and run.
+You can rename `bHapticsRelay.exe` if you want, to something like `bHaptics for AppName.exe` or whatever you prefer.
 
 > [!IMPORTANT]  
 > **Please do not omit the `Readme.txt` file** - it contains attributions for bHaptics, bHapticsRelay and other important information for the end-user.
@@ -423,12 +414,6 @@ End users will install and run the mod as follows. More detailed instructions ar
 > [!NOTE]  
 > All paths in `config.cfg` are relative to the EXE's folder, so players can drop the whole folder anywhere such as on the desktop, in `Program Files`, or even in the game folder itself.
 
-### Note on renaming the .exe
-
-> [!WARNING]
-> Do not rename `bHapticsRelay.exe`; the runtime config and assembly bindings expect the original filename.
-
-
 # Compilation from Source
 
 If you'd like to build bHapticsRelay yourself (to customize, debug, or contribute), follow these steps:
@@ -441,14 +426,17 @@ If you'd like to build bHapticsRelay yourself (to customize, debug, or contribut
 
 ### bhaptics_library.dll
 
-For licensing reasons, the `bhaptics_library.dll` file is not included on this repo. You must download it separately from the `tact-csharp2` bHaptics repo:
+For licensing reasons, the `bhaptics_library.dll` file is not included in this repo's source. You must download it separately from the `tact-csharp2` bHaptics repo:
 
 Link: [bhaptics_library.dll](https://github.com/bhaptics/tact-csharp2/raw/refs/heads/master/tact-csharp2/tact-csharp2/bhaptics_library.dll)
 
 ### Required NuGet Packages & Versions
 
+- Costura.Fody 6.0.0
 - Fleck 1.2.0
+- Fody 6.9.3
 - Microsoft.Extensions.Configuration.Ini 9.0.6
+- Microsoft.NET.ILLink.Tasks 8.0.16
 - Serilog 4.3.0
 - Serilog.Sinks.File 7.0.0
 
@@ -490,27 +478,19 @@ dotnet build -c Debug
 
 After a successful build, you'll find the output in:
 
+Debug build:
 ```
-bHapticsRelay/bHapticsRelay/bin/Debug/net8.0-windows/
+bin/Debug/net8.0-windows/win-x64/
 ```
 
-That folder contains all the necessary files:
-
-```text
-bHapticsRelay.exe
-bHapticsRelay.dll
-bHapticsRelay.runtimeconfig.json
-bHapticsRelay.deps.json
-bhaptics.ico
-bhaptics.png
-config.cfg         (sample-edit as needed)
-DefaultConfig.json (if included)
-Fleck.dll
-Serilog.dll
-Serilog.Sinks.File.dll
-Microsoft.Extensions.*.dll
-...etc
+Release build:
 ```
+bin/Release/net8.0-windows/win-x64/
+```
+
+These folders will contain all the depencency DLLs. To create a self-contained .exe, right click the project and click Publish. Set a publish location, and then click Publish.
+
+The resulting Publish folder should contain a self-contained .exe for distribution. The .pdb file does not need to be included.
 
 ### 6. Test your build
 
@@ -520,9 +500,9 @@ Microsoft.Extensions.*.dll
 
 ### Debug Logging
 
-In Debug configuration, bHapticsRelay will generate additional debug logging in the `/Logs/bhaptics-relay-(date).txt` log file.
+In the Debug release, bHapticsRelay will generate additional debug logging in the `/Logs/bhaptics-relay-(date).txt` log file.
 
-Once you have everything dialed in, change the Solution Configuration to Release and you should be good to go. Feel free to open an Issue or reach out if you have any questions.
+Once you have everything dialed in, switch to the Release version and you should be good to go. Feel free to open an Issue or reach out if you have any questions.
 
 # Game Integration Guide
 
@@ -585,7 +565,7 @@ When a Potion is used by the player, this code is triggered whcih in turn writes
 
 bHapticsRelay sees this and processes the command as `play,drinkeffect` which is then sent to the bHaptics Player to trigger haptic feedback.
 
-As a result, the player feels a 'potion drinking' effect anytime they drink a potion. Neat, hey!? :)
+As a result, the player feels a 'potion drinking' effect anytime they drink a potion. Neat, eh!? :)
 
 ### Tips for log integration:
 
@@ -703,12 +683,26 @@ If you change any of the event names in the portal, make sure to keep everything
   
 # Example Implentations
 
-## OpenMW bHaptics
+## Test Suite
 
-The first implementation of bHapticsRelay is [OpenMW-bHaptics](https://github.com/Dteyn/OpenMW-bHaptics) which uses the log tailing mode to add bHaptics effects to the game.
+I've included a Test Suite which can be used to test bHapticsRelay, along with an example implementations with some effects to try.
+
+The Test Suite also includes a way to test all commands in SDK2 to become familiar with them.
+
+To use it, make sure bHapticsRelay is started and in Websocket mode. Then, start the Test Suite and make sure the Websocket address/port are correct, and click Connect.
+
+You can then try various commands to see how they work and verify that bHapticsRelay is working correctly.
+
+You can also use this with your own implementation to test it; simply edit the `config.cfg` and/or `DefaultConfig.json` for bHapticsRelay to use your project, and then start the test suite. It will list out the effects from your project and let you test them accordingly.
+
+The test suite is just a simple Python script for now and I don't intend to improve it further, but if anyone wants to submit improvements for that I'll happily merge them.
 
 
+## OpenMW (Morrowind) bHaptics
 
+My first implementation of bHapticsRelay will be [OpenMW-bHaptics](https://github.com/Dteyn/OpenMW-bHaptics) which uses the log tailing mode to add bHaptics effects to the game.
+
+It's a work-in-progress and as of writing this, the repo is currently empty. Once published, I'll come back here to update this with some more details on how it works.
 
 
 ## Other Examples
@@ -792,7 +786,7 @@ Right now, only log or WebSocket are supported input methods. The next most obvi
 
 Currently, only SDK2 is integrated and supported. Adding support for SDK1 via `.tact` files would be a great way to extend the program.
 
-I don't currently have plans to add SDK1 support, but if someone else wants to add it I'm certainly open to pull requests on that.
+Since SDK1 is deprecated, I don't currently have plans to add SDK1 support, but if someone else wants to add it for backwards compatibility, I'm certainly open to pull requests on that.
 
 ## Better UI/UX
 
@@ -822,7 +816,7 @@ bHaptics has a Discord community as well, be sure to check it out: [bHaptics Dis
 
 I also specifically want to thank my good friend **Astienth**, whose friendship and guidance has been instrumental in making this project a reality.
 
-Astienth makes many excellent bHaptics mods for many games, you can find his GitHub page here with a listing of all his current projects:
+Astienth makes many excellent bHaptics and flat2VR mods for many games, you can find his GitHub page here with a listing of all his current projects:
 
 https://github.com/Astienth/VR-Mods-Projects
 
@@ -851,7 +845,7 @@ Be sure to check him out if you're looking for the best in VR entertainment and 
 
 # Bhaptics SDK2 API Reference
 
-bHapticsRelay **fully supports** all exported functions provided by `bhaptics_library.dll`. Each available function from triggering haptic effects to querying device status is wrapped and accessible directly through bHapticsRelay.
+bHapticsRelay **fully supports** all functions provided by `bhaptics_library.dll`. Each available function from triggering haptic effects to querying device status is wrapped and accessible directly through bHapticsRelay.
 
 I've also updated `BhapticsSDK2Wrapper.cs` (based on [original source](https://github.com/bhaptics/tact-csharp2/blob/master/tact-csharp2/tact-csharp2/BhapticsSDK2Wrapper.cs) from [bHaptics tact-csharp2](https://github.com/bhaptics/tact-csharp2)) to include comments on usage for each of the exports available in `bhaptics_library.dll`.
 
@@ -860,57 +854,73 @@ For reference, I've documented all exported functions below to assist with integ
 C# examples are provided for every function, and bHapticsRelay command examples are also provided for most.
 
 > [!WARNING]  
-> While I've tried to verify everything, some details below may be incorrect. If anything is inaccurate, please create an Issue with corrected details and I'll update accordingly.
+> Some details below may be incorrect. If anything is inaccurate, please create an Issue with corrected details and I'll update accordingly.
 
-## bhaptics_library.dll Exports
+## SDKv2 Functions
 
-Below is a list of functions available in `bhaptics_library.dll` (and therefore, bHapticsRelay). Documentation on each of these follows.
+Below is a list of functions available in SDK2 (and therefore, bHapticsRelay). More detailed documentation on each of these follows.
 
-#### SDK Connection & Initialization
-- registryAndInit
-- registryAndInitHost
-- wsIsConnected
-- wsClose
-- reInitMessage
+### SDK Connection & Initialization
 
-#### Playback Controls
-- play
-- playPos
-- playPosParam
-- playGlove
-- playDot
-- playWaveform
-- playPath
-- playLoop
-- playWithoutResult
-- stop
-- stopByEventId
-- stopAll
-- isPlaying
-- isPlayingByRequestId
-- isPlayingByEventId
+| Command                                     | Description                                                        |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| [registryAndInit](#registryandinit)         | Registers and initializes the SDK client with the default host.    |
+| [registryAndInitHost](#registryandinithost) | Registers and initializes the SDK client with a custom server URL. |
+| [wsIsConnected](#wsisconnected)             | Checks if the WebSocket connection to bHaptics is live.            |
+| [wsClose](#wsclose)                         | Closes the WebSocket connection.                                   |
+| [reInitMessage](#reinitmessage)             | Re-initializes the message channel (refreshes auth/workspace).     |
 
-#### Device and Connectivity Utilities
-- isbHapticsConnected
-- ping
-- pingAll
-- swapPosition
-- getDeviceInfoJson
+### Playback Controls
 
-#### Player Application Controls
-- isPlayerInstalled
-- isPlayerRunning
-- launchPlayer
+| Command                                       | Description                                                                         |
+| --------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [play](#play)                                 | Plays a pre-defined haptic pattern by event ID.                                     |
+| [playParam](#playparam)                       | Plays a haptic pattern with custom parameters (intensity/duration/rotation/offset). |
+| [playDot](#playdot)                           | Activates specific motors as a dot pattern.                                         |
+| [playWaveform](#playwaveform)                 | Plays a waveform pattern using intensity, timing, and shape arrays.                 |
+| [playPath](#playpath)                         | Plays a path-based haptic effect using x/y coordinates and intensities.             |
+| [playWithStartTime](#playwithstarttime)       | Plays a haptic pattern starting at a specific time offset, with custom parameters.  |
+| [playLoop](#playloop)                         | Plays a looping haptic pattern with interval and loop count.                        |
+| [pause](#pause)                               | Pauses a specific haptic playback by event ID.                                      |
+| [resume](#resume)                             | Resumes a previously paused haptic playback by event ID.                            |
+| [stop](#stop)                                 | Stops playback by request ID.                                                       |
+| [stopByEventId](#stopbyeventid)               | Stops playback by event name/key.                                                   |
+| [stopAll](#stopall)                           | Stops all active haptic feedback.                                                   |
+| [isPlaying](#isplaying)                       | Checks if any haptic pattern is currently playing.                                  |
+| [isPlayingByRequestId](#isplayingbyrequestid) | Checks if a specific request ID is playing.                                         |
+| [isPlayingByEventId](#isplayingbyeventid)     | Checks if a specific event name/key is playing.                                     |
 
-#### Advanced Message & Mapping Retrieval
-- bHapticsGetHapticMessage
-- bHapticsGetHapticMappings
-- getEventTime
-- getHapticMappingsJson
+### Device and Connectivity Utilities
+
+| Command                                     | Description                                             |
+| ------------------------------------------- | ------------------------------------------------------- |
+| [isbHapticsConnected](#isbhapticsconnected) | Checks if a device is connected at a specific position. |
+| [ping](#ping)                               | Pings a specific device.                                |
+| [pingAll](#pingall)                         | Pings all connected devices.                            |
+| [swapPosition](#swapposition)               | Swaps left/right device positions.                      |
+| [setDeviceVsm](#setdevicevsm)               | Sets the VSM (vibration sequence mode) for a device.    |
+| [getDeviceInfoJson](#getdeviceinfojson)     | Retrieves device info as a JSON string.                 |
+
+### Player Application Controls
+
+| Command                                 | Description                                     |
+| --------------------------------------- | ----------------------------------------------- |
+| [isPlayerInstalled](#isplayerinstalled) | Checks if the bHaptics Player app is installed. |
+| [isPlayerRunning](#isplayerrunning)     | Checks if the bHaptics Player app is running.   |
+| [launchPlayer](#launchplayer)           | Launches the bHaptics Player app.               |
+
+### Advanced Message & Mapping Retrieval
+
+| Command                                         | Description                                       |
+| ----------------------------------------------- | ------------------------------------------------- |
+| [getEventTime](#geteventtime)                   | Retrieves the timing metadata for a haptic event. |
+| [getHapticMappingsJson](#gethapticmappingsjson) | Retrieves all mapping data as a JSON string.      |
+
 
 ## SDK Connection & Initialization
 
-NOTE: Only C# Examples are provided for this section.
+> [!NOTE]
+> Only C# Examples are provided for this section.
 
 ### `registryAndInit`
 
@@ -919,13 +929,13 @@ public static extern bool registryAndInit(string sdkAPIKey, string workspaceId, 
 ```
 
 **Description:**
-Registers and initializes the SDK client with the default host.
+Registers the app with a locally running bHaptics Player and initializes it with an initial haptic message.
 
 **Parameters:**
 
 * **sdkAPIKey** (`string`): Your bHaptics SDK API key.
 * **workspaceId** (`string`): Workspace/session identifier.
-* **initData** (`string`): Initialization parameters (JSON or serialized).
+* **initData** (`string`): Initialization parameters (Default Config JSON). Must be an empty string if not specifying any JSON data.
 
 **Returns:** `bool` - `true` if successful
 
@@ -950,7 +960,7 @@ Like `registryAndInit`, but lets you specify a custom server URL (for self-hoste
 
 * **sdkAPIKey** (`string`): Your bHaptics SDK API key.
 * **workspaceId** (`string`): Workspace/session identifier.
-* **initData** (`string`): Initialization parameters (JSON or serialized).
+* **initData** (`string`): Initialization parameters (Default Config JSON). Must be an empty string if not specifying any JSON data.
 * **url** (`string`): Custom WebSocket server address (e.g., `ws://localhost:9000`).
 
 **Returns:** `bool` - `true` if successful.
@@ -979,7 +989,7 @@ Checks if the WebSocket connection to bHaptics is live.
 **C# Example:**
 
 ```csharp
-if (!bHapticsRelay.wsIsConnected()) {
+if (!BhapticsSDK2Wrapper.wsIsConnected()) {
     // Try reconnecting...
 }
 ```
@@ -993,7 +1003,7 @@ public static extern void wsClose();
 ```
 
 **Description:**
-Closes the WebSocket connection to bHaptics service.
+Closes the WebSocket connection to bHaptics player.
 
 **Parameters:** none
 
@@ -1002,7 +1012,7 @@ Closes the WebSocket connection to bHaptics service.
 **C# Example:**
 
 ```csharp
-bHapticsRelay.wsClose();
+BhapticsSDK2Wrapper.wsClose();
 ```
 
 ---
@@ -1020,7 +1030,7 @@ Re-initializes the message channel (e.g., refresh authentication/workspace witho
 
 * **sdkAPIKey** (`string`): Your bHaptics SDK API key.
 * **workspaceId** (`string`): Workspace/session identifier.
-* **initData** (`string`): Initialization parameters (JSON or serialized).
+* **initData** (`string`): Initialization parameters (Default Config JSON).
 
 **Returns:** `bool` - `true` if succeeded.
 
@@ -1037,114 +1047,134 @@ bool refreshed = BhapticsSDK2Wrapper.reInitMessage("YOUR_API_KEY", "workspace_2"
 ## `play`
 
 ```csharp
-public static extern int play(string key);
+public static extern int play(string eventId);
 ```
 
 **Description:**
-Plays a pre-defined haptic pattern.
+Plays a pre-defined haptic pattern by event ID.
 
 **Parameters:**
-* **key** (`string`): Identifier for the haptic event.
+* **eventId** (`string`): Identifier for the haptic event.
 
 **Returns:** `int` - Request ID (>0 if started; <=0 on error).
 
 **C# Example:**
 
 ```csharp
-int reqId = BhapticsSDK2Wrapper.play("HeartBeat");
+int reqId = BhapticsSDK2Wrapper.play("heartbeat");
 ```
 
 **bHapticsRelay Example:**
 ```csharp
-play,HeartBeat
+play,heartbeat
 ```
 
 ---
 
-## `playPos`
+## `playParam`
 
 ```csharp
-public static extern int playPos(string key, int position);
+public static extern int playParam(string eventId, int requestId, float intensity, float duration, float angleX, float offsetY);
 ```
 
 **Description:**
-Plays a haptic pattern at a specific device position (legacy overload).
+Plays a haptic pattern with custom parameters (intensity/duration/rotation/offset). Requires a caller-supplied `requestId` for tracking and stop calls.
 
 **Parameters:**
-* **key** (`string`): Identifier for the haptic event.
-* **position** (`int`): Device position index (e.g., vest, arm).
+
+* **eventId** (`string`): Identifier for the haptic pattern.
+* **requestId** (`int`): Caller-assigned request ID for tracking (0 to auto-generate)
+* **intensity** (`float`): Strength multiplier (Default = 1.0)
+* **duration** (`float`): Duration multiplier (Default = 1.0)
+* **angleX** (`float`): X-axis offset (Default = 0.0)
+* **offsetY** (`float`): Y-axis offset (Default = 0.0)
 
 **Returns:** `int` - Request ID (>0 if started; <=0 on error).
 
 **C# Example:**
 
 ```csharp
-int reqId = BhapticsSDK2Wrapper.playPos("Slash", 0); // 0 = vest
+int reqId = 101;
+int result = BhapticsSDK2Wrapper.playParam("impact", reqId, 0.8f, 1.0f, 45.0f, 0.0f);
 ```
 
 **bHapticsRelay Example:**
+
 ```csharp
-playPos,Slash,0
+playParam,impact,101,0.8,1.0,45,0.0
 ```
 
 ---
 
-## `playPosParam`
+## `playWithStartTime`
 
 ```csharp
-public static extern int playPosParam(string key, int position, float intensity, float duration, float angleX, float offsetY);
+public static extern void playWithStartTime(string eventId, int requestId, int startMillis, float intensity, float duration, float angleX, float offsetY);
 ```
 
 **Description:**
-Plays a pattern at a position with custom parameters.
+Plays a haptic pattern starting at a specific time offset with custom parameters. Requires a caller-supplied `requestId` for tracking.
 
 **Parameters:**
-* **key** (`string`): Identifier for the haptic event.
-* **position** (`int`): Device position index (e.g., vest, arm).
-* **intensity** (`float`): 0.0 to 1.0
-* **duration** (`float`): Seconds
-* **angleX** (`float`): X-axis rotation
-* **offsetY** (`float`): Vertical offset
 
-**Returns:** `int` - Request ID (>0 if started; <=0 on error).
+* **eventId** (`string`): Identifier for the haptic pattern.
+* **requestId** (`int`): Caller-assigned request ID for tracking (0 to auto-generate)
+* **startMillis** (`int`): Start offset in milliseconds from the beginning of the pattern
+* **intensity** (`float`): Strength multiplier (Default = 1.0)
+* **duration** (`float`): Duration multiplier (Default = 1.0)
+* **angleX** (`float`): X-axis offset (Default = 0.0)
+* **offsetY** (`float`): Y-axis offset (Default = 0.0)
+
+**Returns:** `void` - No return value; playback is fire-and-forget.
 
 **C# Example:**
 
 ```csharp
-int reqId = BhapticsSDK2Wrapper.playPosParam("Impact", 0, 0.8f, 1.0f, 45.0f, 0.0f);
+int reqId = 201;
+BhapticsSDK2Wrapper.playWithStartTime("explosion", reqId, 500, 0.9f, 1.2f, 30.0f, 0.0f);
 ```
 
 **bHapticsRelay Example:**
+
 ```csharp
-playPosParam,Impact,0,0.9,1.0,30,0.0
+playWithStartTime,explosion,201,500,0.9,1.2,30,0
 ```
 
 ---
 
-## `playGlove`
+## `playLoop`
 
 ```csharp
-public static extern int playGlove(string key, int timeout);
+public static extern int playLoop(string eventId, int requestId, float intensity, float duration, float angleX, float offsetY, int interval, int maxCount);
 ```
 
 **Description:**
-Plays a pattern on a glove device.
+Plays a looping haptic pattern. Loop timing and maximum count can be specified.
 
 **Parameters:**
-* **key** (`string`): Identifier for the haptic event.
-* **timeout** (`int`): Timeout in milliseconds
+
+* **eventId** (`string`): Identifier for the haptic pattern.
+* **requestId** (`int`): Caller-assigned request ID for tracking (0 to auto-generate)
+* **intensity** (`float`): Strength multiplier (Default = 1.0)
+* **duration** (`float`): Duration multiplier (Default = 1.0)
+* **angleX** (`float`): X-axis offset (Default = 0.0)
+* **offsetY** (`float`): Y-axis offset (Default = 0.0)
+* **interval** (`int`): Milliseconds between loop iterations
+* **maxCount** (`int`): Maximum number of loops
 
 **Returns:** `int` - Request ID (>0 if started; <=0 on error).
 
 **C# Example:**
 
 ```csharp
-int reqId = BhapticsSDK2Wrapper.playGlove("Pinch", 1000);
+int reqId = 301;
+int result = BhapticsSDK2Wrapper.playLoop("pulse", reqId, 1.0f, 0.5f, 0.0f, 0.0f, 1000, 5);
 ```
 
 **bHapticsRelay Example:**
+
 ```csharp
-playGlove,Pinch,1000
+playLoop,pulse,301,1.0,0.5,0,0,1000,5
 ```
 
 ---
@@ -1152,13 +1182,15 @@ playGlove,Pinch,1000
 ## `playDot`
 
 ```csharp
-public static extern int playDot(int position, int durationMillis, int[] motors, int size);
+public static extern int playDot(int requestId, int position, int durationMillis, int[] motors, int size);
 ```
 
 **Description:**
-Activates specific motors as a dot pattern.
+Activates specific motors as a dot pattern. Requires a caller-supplied `requestId` for tracking and stop calls.
 
 **Parameters:**
+
+* **requestId** (`int`): Caller-assigned request ID for tracking.
 * **position** (`int`): Device position index
 * **durationMillis** (`int`): Duration per dot (ms)
 * **motors** (`int[]`): Indices of motors to activate
@@ -1169,33 +1201,37 @@ Activates specific motors as a dot pattern.
 **C# Example:**
 
 ```csharp
+int reqId = 102;
 int[] motors = { 1, 4, 7 };
-int reqId = BhapticsSDK2Wrapper.playDot(0, 150, motors, motors.Length);
+int result = BhapticsSDK2Wrapper.playDot(reqId, 0, 200, motors, motors.Length);
 ```
 
 **bHapticsRelay Example:**
+
 ```csharp
-playDot,0,200,1|4|7,3
+playDot,102,0,200,1|4|7,3
 ```
 
-_(motors are pipe-separated; last value is count)_
+*(motors are pipe-separated; last value is count)*
 
 ---
 
 ## `playWaveform`
 
 ```csharp
-public static extern int playWaveform(int position, int[] motorValues, int[] playTimeValues, int[] shapeValues, int motorLen);
+public static extern int playWaveform(int requestId, int position, int[] motorValues, int[] playTimeValues, int[] shapeValues, int motorLen);
 ```
 
 **Description:**
-Plays a waveform using custom intensity, timing, and shape arrays.
+Plays a waveform pattern by specifying motor intensities, play times, and shape values. Requires a caller-supplied `requestId` for tracking and stop calls.
 
 **Parameters:**
+
+* **requestId** (`int`): Caller-assigned request ID for tracking.
 * **position** (`int`): Device position index
 * **motorValues** (`int[]`): Intensities per motor
 * **playTimeValues** (`int[]`): Play duration per motor
-* **shapeValues** (`int[]`): Shape params
+* **shapeValues** (`int[]`): Shape parameters
 * **motorLen** (`int`): Length of motor arrays
 
 **Returns:** `int` - Request ID (>0 if started; <=0 on error).
@@ -1203,107 +1239,117 @@ Plays a waveform using custom intensity, timing, and shape arrays.
 **C# Example:**
 
 ```csharp
+int reqId = 103;
 int[] intensities = { 100, 80, 0, 0, 50 };
 int[] durations = { 100, 100, 100, 100, 100 };
 int[] shapes = { 1, 1, 1, 1, 1 };
-int reqId = BhapticsSDK2Wrapper.playWaveform(0, intensities, durations, shapes, intensities.Length);
+int result = BhapticsSDK2Wrapper.playWaveform(reqId, 0, intensities, durations, shapes, intensities.Length);
 ```
 
 **bHapticsRelay Example:**
+
 ```csharp
-playWaveform,0,100|80|0|0|50,100|100|100|100|100,1|1|1|1|1,5
+playWaveform,103,0,100|80|0|0|50,100|100|100|100|100,1|1|1|1|1,5
 ```
+
+*(arrays are pipe-separated; last value is array length)*
 
 ---
 
 ## `playPath`
 
 ```csharp
-public static extern int playPath(int position, float[] xValues, float[] yValues, int[] intensityValues, int Len);
+public static extern int playPath(int requestId, int position, float[] xValues, float[] yValues, int[] intensityValues, int Len);
 ```
 
 **Description:**
-Plays a path-based effect with custom x/y coordinates and intensities.
+Plays a path-based haptic effect by specifying x/y coordinates and intensities. Requires a caller-supplied `requestId` for tracking and stop calls.
 
 **Parameters:**
-* **position** (`int`): Device position index  
-* **xValues** (`float[]`): Array of X-axis coordinates for each point  
-* **yValues** (`float[]`): Array of Y-axis coordinates for each point  
-* **intensityValues** (`float[]`): Array of intensity values for each point  
-* **Len** (`int`): Length of the coordinate and intensity arrays  
+
+* **requestId** (`int`): Caller-assigned request ID for tracking.
+* **position** (`int`): Device position index
+* **xValues** (`float[]`): Array of X-axis coordinates for each point
+* **yValues** (`float[]`): Array of Y-axis coordinates for each point
+* **intensityValues** (`int[]`): Array of intensity values for each point
+* **Len** (`int`): Length of coordinate and intensity arrays
 
 **Returns:** `int` - Request ID (>0 if started; <=0 on error).
 
 **C# Example:**
 
 ```csharp
+int reqId = 104;
 float[] x = { 0.1f, 0.2f, 0.3f };
 float[] y = { 0.5f, 0.5f, 0.5f };
 int[] intensity = { 80, 60, 100 };
-int reqId = BhapticsSDK2Wrapper.playPath(0, x, y, intensity, x.Length);
+int result = BhapticsSDK2Wrapper.playPath(reqId, 0, x, y, intensity, x.Length);
 ```
 
 **bHapticsRelay Example:**
+
 ```csharp
-playPath,0,0.1|0.2|0.3,0.5|0.5|0.5,80|60|100,3
+playPath,104,0,0.1|0.2|0.3,0.5|0.5|0.5,80|60|100,3
 ```
+
+*(arrays are pipe-separated; last value is array length)*
+
 ---
 
-## `playLoop`
+## `pause`
 
 ```csharp
-public static extern int playLoop(string key, float intensity, float duration, float angleX, float offsetY, int interval, int maxCount);
+public static extern bool pause(string eventId);
 ```
 
 **Description:**
-Plays a looping haptic pattern.
+Pauses a specific haptic playback by event ID.
 
 **Parameters:**
-* **key** (`string`): Identifier for the haptic event.
-* **intensity** (`float`): 0.0 to 1.0
-* **duration** (`float`): Seconds
-* **angleX** (`float`): X-axis rotation
-* **offsetY** (`float`): Vertical offset
-* **interval** (`int`): Milliseconds between loops
-* **maxCount** (`int`): Max loops (0 = infinite)
 
-**Returns:** `int` - Request ID (>0 if started; <=0 on error).
+* **eventId** (`string`): Name of the event identifier to pause.
+
+**Returns:** `bool` - `true` if paused successfully
 
 **C# Example:**
 
 ```csharp
-int reqId = BhapticsSDK2Wrapper.playLoop("Pulse", 1.0f, 0.5f, 0.0f, 0.0f, 1000, 5);
+BhapticsSDK2Wrapper.pause("fly_effect");
 ```
 
 **bHapticsRelay Example:**
+
 ```csharp
-playLoop,Pulse,1.0,0.5,0,0,1000,5
+pause,fly_effect
 ```
+
 ---
 
-## `playWithoutResult`
+## `resume`
 
 ```csharp
-public static extern void playWithoutResult(string key);
+public static extern bool resume(string eventId);
 ```
 
 **Description:**
-Fire-and-forget pattern playback (no result code).
+Resumes a previously paused haptic playback by request ID.
 
 **Parameters:**
-* **key** (`string`): Identifier for the haptic event.
 
-**Returns:** nothing
+* **eventId** (`string`): Name of the event identifier to pause.
+
+**Returns:** `bool` - `true` if resumed successfully
 
 **C# Example:**
 
 ```csharp
-BhapticsSDK2Wrapper.playWithoutResult("Vibrate");
+BhapticsSDK2Wrapper.resume("fly_effect");
 ```
 
 **bHapticsRelay Example:**
+
 ```csharp
-playWithoutResult,Vibrate
+resume,fly_effect
 ```
 
 ---
@@ -1311,29 +1357,27 @@ playWithoutResult,Vibrate
 ## `stop`
 
 ```csharp
-public static extern bool stop(int key);
+public static extern bool stop(int reqId);
 ```
 
 **Description:**
 Stops playback by request ID.
 
 **Parameters:**
-* **key** (`int`): Request ID returned from play/playPosParam.
+* **reqId** (`int`): Request ID returned from play/playPosParam.
 
 **Returns:** `bool` - `true` if stopped
 
 **C# Example:**
 
 ```csharp
-BhapticsSDK2Wrapper.stop(reqId);
+BhapticsSDK2Wrapper.stop(12345);
 ```
 
 **bHapticsRelay Example:**
 ```csharp
 stop,12345
 ```
-
-_(where 12345 is the request ID returned from play commands)_
 
 ---
 
@@ -1354,12 +1398,12 @@ Stops playback by event name/key.
 **C# Example:**
 
 ```csharp
-BhapticsSDK2Wrapper.stopByEventId("Pulse");
+BhapticsSDK2Wrapper.stopByEventId("pulse");
 ```
 
 **bHapticsRelay Example:**
 ```csharp
-stopByEventId,Pulse
+stopByEventId,pulse
 ```
 
 ---
@@ -1419,14 +1463,14 @@ isPlaying
 ## `isPlayingByRequestId`
 
 ```csharp
-public static extern bool isPlayingByRequestId(int key);
+public static extern bool isPlayingByRequestId(int requestId);
 ```
 
 **Description:**
 Checks if a specific request ID is playing.
 
 **Parameters:**
-* **key** (`int`): Request ID returned from play/playPosParam.
+* **requestId** (`int`): Request ID to check.
 
 - **Returns:** `bool` - `true` if still playing
 
@@ -1440,7 +1484,6 @@ if (BhapticsSDK2Wrapper.isPlayingByRequestId(reqId)) { /* ... */ }
 ```csharp
 isPlayingByRequestId,12345
 ```
-_(where 12345 is the request ID returned by play commands)_
 
 ---
 
@@ -1461,12 +1504,12 @@ Checks if a specific event name/key is playing.
 **C# Example:**
 
 ```csharp
-if (BhapticsSDK2Wrapper.isPlayingByEventId("Slash")) { /* ... */ }
+if (BhapticsSDK2Wrapper.isPlayingByEventId("slash")) { /* ... */ }
 ```
 
 **bHapticsRelay Example:**
 ```csharp
-isPlayingByEventId,Slash
+isPlayingByEventId,slash
 ```
 
 ---
@@ -1519,16 +1562,16 @@ Pings a specific device.
 **C# Example:**
 
 ```csharp
-bool online = BhapticsSDK2Wrapper.ping("00:11:22:33:44:55");
+bool online = BhapticsSDK2Wrapper.ping("0");
 ```
-
-> [!CAUTION]
-> Not sure if the address here is MAC Address or device index. Need to test and confirm.
 
 **bHapticsRelay Example:**
 ```csharp
-ping,00:11:22:33:44:55
+ping,0
 ```
+
+> [!NOTE]
+> Documentation here needs improvement - this command needs more testing.
 
 ---
 
@@ -1575,16 +1618,48 @@ Swaps left/right (primary/secondary) device positions.
 **C# Example:**
 
 ```csharp
-BhapticsSDK2Wrapper.swapPosition("00:11:22:33:44:55");
+BhapticsSDK2Wrapper.swapPosition("0");
 ```
 
 > [!CAUTION]
-> Not sure if the address here is MAC Address or device index. Need to test and confirm.
+> The documentation here needs improvement - this command is not thoroughly tested.
 
 **bHapticsRelay Example:**
 ```csharp
-swapPosition,00:11:22:33:44:55
+swapPosition,0
 ```
+
+---
+
+## `setDeviceVsm`
+
+```csharp
+public static extern bool setDeviceVsm(string address, int vsm);
+```
+
+**Description:**
+Sets the VSM (vibration sequence mode) for a specific bHaptics device.
+
+**Parameters:**
+
+* **address** (`string`): Device address.
+* **vsm** (`int`): VSM setting value.
+
+**Returns:** `bool` - `true` if the operation succeeded; otherwise, false.
+
+**C# Example:**
+
+```csharp
+bool success = BhapticsSDK2Wrapper.setDeviceVsm("0", 20);
+```
+
+**bHapticsRelay Example:**
+
+```csharp
+setDeviceVsm,0,20
+```
+> [!WARNING]
+> This command has not been tested or verified - info to be updated.
 
 ---
 
@@ -1676,14 +1751,14 @@ isPlayerRunning
 ## `launchPlayer`
 
 ```csharp
-public static extern bool launchPlayer(bool launch);
+public static extern bool launchPlayer(bool tryLaunch);
 ```
 
 **Description:**
 Launches the bHaptics Player app. Must pass 'true' as parameter for launch to proceed.
 
 **Parameters:**
-* **launch** (`bool`): `true` to start
+* **tryLaunch** (`bool`): `true` to start
 
 **Returns:** `bool` - `true` if launch was successful
 
@@ -1702,70 +1777,6 @@ launchPlayer,true
 
 ## Advanced Message & Mapping Retrieval
 
-## `bHapticsGetHapticMessage`
-
-```csharp
-public static extern IntPtr bHapticsGetHapticMessage(string apiKey, string appId, int lastVersion, out int status);
-```
-
-**Description:**
-Retrieves the latest haptic messages from the bHaptics server for the given application.
-
-**Parameters:**
-* **apiKey** (`string`): bHaptics API key
-* **appId** (`string`): Application/Workspace ID
-* **lastVersion** (`int`): Version number of the last message received (specify -1 for all)
-* **status** (`out int`): Output status code (HTTP-like)
-
-**Returns:** `IntPtr` - Pointer to a null-terminated C string containing latest haptic messages in JSON format.
-
-**C# Example:**
-
-```csharp
-int status;
-IntPtr ptr = BhapticsSDK2Wrapper.bHapticsGetHapticMessage("YOUR_KEY", "AppID", 1, out status);
-string json = Marshal.PtrToStringAnsi(ptr);
-```
-
-**bHapticsRelay Example:**
-```csharp
-bHapticsGetHapticMessage,"YOUR_KEY","AppID",-1
-```
-
----
-
-## `bHapticsGetHapticMappings`
-
-```csharp
-public static extern IntPtr bHapticsGetHapticMappings(string apiKey, string appId, int lastVersion, out int status);
-```
-
-**Description:**
-Retrieves custom haptic event mappings from the bHaptics server for the given application.
-
-**Parameters:**
-* **apiKey** (`string`): bHaptics API key
-* **appId** (`string`): Application/Workspace ID
-* **lastVersion** (`int`): Version number of the last message received (specify -1 for all)
-* **status** (`out int`): Output status code (HTTP-like)
-
-**Returns:** `IntPtr` - Pointer to a null-terminated C string containing new haptic mappings in JSON format.
-
-**C# Example:**
-
-```csharp
-int status;
-IntPtr ptr = BhapticsSDK2Wrapper.bHapticsGetHapticMappings("YOUR_KEY", "AppID", 1, out status);
-string json = Marshal.PtrToStringAnsi(ptr);
-```
-
-**bHapticsRelay Example:**
-```csharp
-bHapticsGetHapticMappings,"YOUR_KEY","AppID",-1
-```
-
----
-
 ## `getEventTime`
 
 ```csharp
@@ -1783,12 +1794,12 @@ Retrieves the event timing metadata for a given event identifier (e.g., duration
 **C# Example:**
 
 ```csharp
-int duration = BhapticsSDK2Wrapper.getEventTime("Impact");
+int duration = BhapticsSDK2Wrapper.getEventTime("impact");
 ```
 
 **bHapticsRelay Example:**
 ```csharp
-getEventTime,Impact
+getEventTime,impact
 ```
 
 ---

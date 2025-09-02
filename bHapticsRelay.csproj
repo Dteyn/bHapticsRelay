@@ -10,29 +10,42 @@
     <Description>Acts as a relay to bHaptics Player for SDK2 events.</Description>
     <Copyright>2025 Dteyn (https://github.com/Dteyn)</Copyright>
     <PackageProjectUrl>https://github.com/Dteyn/bHapticsRelay</PackageProjectUrl>
-    <PackageIcon>bhaptics.png</PackageIcon>
-    <ApplicationIcon>bhaptics.ico</ApplicationIcon>
+    <PackageIcon>bhaptics-logo.png</PackageIcon>
+    <ApplicationIcon>bhaptics-relay-icon.ico</ApplicationIcon>
     <Authors>https://github.com/Dteyn</Authors>
     <Product>bHapticsRelay</Product>
-    <AssemblyVersion>0.2.0</AssemblyVersion>
-    <FileVersion>0.2.0</FileVersion>
-    <Version>0.2.0</Version>
+    <AssemblyVersion>0.3.0</AssemblyVersion>
+    <FileVersion>0.3.0</FileVersion>
+    <Version>0.3.0</Version>
     <PackageId>$(AssemblyName)</PackageId>
+	<PublishSingleFile>true</PublishSingleFile>
+	<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+	<PublishTrimmed>false</PublishTrimmed>
+	<SelfContained>true</SelfContained>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="dev\**" />
+    <EmbeddedResource Remove="dev\**" />
+    <None Remove="dev\**" />
+    <Page Remove="dev\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Remove="bhaptics-logo.png" />
+    <None Remove="bhaptics-relay-icon.ico" />
     <None Remove="bhaptics.ico" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="bhaptics.ico">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-
-  <ItemGroup>
+    <PackageReference Include="Costura.Fody" Version="6.0.0">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="Fleck" Version="1.2.0" />
+    <PackageReference Include="Fody" Version="6.9.3">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Configuration.Ini" Version="9.0.6" />
     <PackageReference Include="Serilog" Version="4.3.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
@@ -40,9 +53,9 @@
 
   <ItemGroup>
     <Resource Include="bhaptics-logo.png">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </Resource>
-    <Resource Include="bhaptics.ico">
+    <Resource Include="bhaptics-relay-icon.ico">
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </Resource>
   </ItemGroup>
@@ -51,6 +64,12 @@
     <None Update="bhaptics.png">
       <Pack>True</Pack>
       <PackagePath>\</PackagePath>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="bHapticsRelay_Test_Suite.py">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="bHapticsRelay_Test_Suite.pyw">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Update="bhaptics_library.dll">
@@ -75,7 +94,7 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Update="README.md">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </None>
     <None Update="Readme.txt">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>

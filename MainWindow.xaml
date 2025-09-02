@@ -5,7 +5,7 @@
         Width="520" Height="370"
         Background="#1a1a1a"
         WindowStartupLocation="CenterScreen"
-        Icon="pack://application:,,,/bhaptics.ico"
+        Icon="pack://application:,,,/bhaptics-relay-icon.ico"
         Closing="Window_Closing">
     <Window.Resources>
         <Style TargetType="Button">
@@ -107,7 +107,7 @@
         </Grid.RowDefinitions>
 
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,16,0,10">
-            <Image Source="pack://application:,,,/bhaptics-logo.png" Width="90" Height="26" Stretch="Uniform"/>
+            <Image Source="pack://application:,,,/bhaptics-logo.png" Width="120" Height="28" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
             <TextBlock x:Name="AppTitleText"
                        Text="bHapticsRelay"
                        Foreground="White"

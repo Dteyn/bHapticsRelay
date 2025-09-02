@@ -4,19 +4,9 @@
  *
  * Original Source: https://github.com/bhaptics/tact-csharp2/blob/master/tact-csharp2/tact-csharp2/BhapticsSDK2Wrapper.cs
  *
- * This is a thoroughly commented and documented version of the above source. In addition to comments,
- * additional support has been added for 5 additional exports not supported in the original source:
- * getEventTime, getHapticMappingsJson, playPos, playGlove, and playWithoutResult have been added.
+ * This is a thoroughly commented and documented version of the above source. 
  * 
- * Summary:
- *   P/Invoke wrapper for the native bhaptics_library.dll.  
- *   Enables C# applications to:
- *     – Initialize and manage the bHaptics SDK connection  
- *     – Play, stop, and query haptic patterns (including positional, dot, waveform, path, loop, glove)  
- *     – Inspect device connectivity and player application state  
- *     – Retrieve event timing and mapping data as JSON  
- *
- * Available Exports:
+ * Available Exports (SDK 2.0.0):
  *   // Initialization & Connection
  *   bool   registryAndInit(string sdkAPIKey, string workspaceId, string initData)
  *   bool   registryAndInitHost(string sdkAPIKey, string workspaceId, string initData, string url)
@@ -24,42 +14,47 @@
  *   void   wsClose()
  *   bool   reInitMessage(string sdkAPIKey, string workspaceId, string initData)
  *
- *   // Playback Controls
- *   int    play(string key)
- *   int    playPos(string key, int position)
- *   int    playPosParam(string key, int position, float intensity, float duration, float angleX, float offsetY)
- *   int    playGlove(string key, int timeout)
- *   void   playWithoutResult(string key)
- *   bool   stop(int key)
+ *   // Playback Controls (event-centric with request IDs)
+ *   int    play(string eventId)
+ *   int    playParam(string eventId, int requestId, float intensity, float duration, float angleX, float offsetY)
+ *   void   playWithStartTime(string eventId, int requestId, int startMillis, float intensity, float duration, float angleX, float offsetY)
+ *   int    playLoop(string eventId, int requestId, float intensity, float duration, float angleX, float offsetY, int interval, int maxCount)
+ *   int    pause(string eventId)
+ *   bool   resume(string eventId)
+ *   bool   stop(int requestId)
  *   bool   stopByEventId(string eventId)
  *   bool   stopAll()
  *   bool   isPlaying()
- *   bool   isPlayingByRequestId(int key)
+ *   bool   isPlayingByRequestId(int requestId)
  *   bool   isPlayingByEventId(string eventId)
  *
- *   // Low-Level Pattern Playback
- *   int    playDot(int position, int durationMillis, int[] motors, int size)
- *   int    playWaveform(int position, int[] motorValues, int[] playTimeValues, int[] shapeValues, int motorLen)
- *   int    playPath(int position, float[] xValues, float[] yValues, int[] intensityValues, int Len)
- *   int    playLoop(string key, float intensity, float duration, float angleX, float offsetY, int interval, int maxCount)
+ *   // Low-Level Pattern Playback (requestId-first)
+ *   int    playDot(int requestId, int position, int durationMillis, int[] motors, int size)
+ *   int    playWaveform(int requestId, int position, int[] motorValues, int[] playTimeValues, int[] shapeValues, int motorLen)
+ *   int    playPath(int requestId, int position, float[] xValues, float[] yValues, int[] intensityValues, int Len)
  *
  *   // Device & Connectivity Utilities
  *   bool   isbHapticsConnected(int position)
  *   bool   ping(string address)
  *   bool   pingAll()
  *   bool   swapPosition(string address)
+ *   bool   setDeviceVsm(string address, int vsm)
  *   IntPtr getDeviceInfoJson()
  *
  *   // Player Application Controls
  *   bool   isPlayerInstalled()
  *   bool   isPlayerRunning()
- *   bool   launchPlayer(bool launch)
+ *   bool   launchPlayer(bool tryLaunch)
  *
- *   // Advanced Message & Mapping Retrieval
- *   IntPtr bHapticsGetHapticMessage(string apiKey, string appId, int lastVersion, out int status)
- *   IntPtr bHapticsGetHapticMappings(string apiKey, string appId, int lastVersion, out int status)
+ *   // Mapping & Timing Retrieval
  *   int    getEventTime(string eventId)
  *   IntPtr getHapticMappingsJson()
+ *
+ * Notes on removed legacy exports (kept here for reference only):
+ *   - playPos, playPosParam -> replaced by playParam(eventId, requestId, ...)
+ *   - playGlove -> removed upstream
+ *   - playWithoutResult -> removed upstream
+ *   - bHapticsGetHapticMessage / bHapticsGetHapticMappings -> replaced by getHapticMappingsJson()
  */
 
 using System;
@@ -93,7 +88,6 @@ namespace tact_csharp2
 
         /// <summary>
         /// Registers and initializes the SDK client, specifying a custom host URL.
-        /// Useful when running against a self-hosted bHaptics server or staging environment.
         /// </summary>
         /// <param name="sdkAPIKey">Your bHaptics SDK API key.</param>
         /// <param name="workspaceId">Workspace identifier used to segregate sessions.</param>
@@ -119,8 +113,7 @@ namespace tact_csharp2
         public static extern void wsClose();
 
         /// <summary>
-        /// Re-initializes the message channel without restarting the entire SDK.
-        /// Can be used to refresh authentication or workspace parameters.
+        /// Re-initializes the SDK connection without restarting the entire SDK.
         /// </summary>
         /// <param name="sdkAPIKey">Your bHaptics SDK API key.</param>
         /// <param name="workspaceId">Workspace identifier used to segregate sessions.</param>
@@ -135,83 +128,44 @@ namespace tact_csharp2
         #region Playback Controls
 
         /// <summary>
-        /// Plays a pre-defined haptic event by key/name.
+        /// Plays a pre-defined haptic event by its string identifier.
         /// </summary>
-        /// <param name="key">Identifier for the haptic pattern (event key).</param>
+        /// <param name="eventId">Identifier for the haptic pattern (event id/key).</param>
         /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int play(string key);
+        public static extern int play(string eventId);
 
         /// <summary>
-        /// Plays a haptic pattern using only position index (legacy overload).
+        /// Plays a haptic pattern with custom parameters (intensity/duration/rotation/offset).
         /// </summary>
-        /// <param name="key">Identifier for the haptic pattern (event key).</param>
-        /// <param name="position">Device position index.</param>
-        /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
-        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int playPos(string key, int position);
-
-        /// <summary>
-        /// Plays a haptic pattern at a specified position with custom parameters.
-        /// </summary>
-        /// <param name="key">Identifier for the haptic pattern (event key).</param>
-        /// <param name="position">Device position index (e.g., vest, arm, etc.).</param>
+        /// <param name="eventId">Identifier for the haptic pattern.</param>
+        /// <param name="requestId">Caller-assigned request identifier used for tracking/stop calls.</param>
         /// <param name="intensity">Intensity multiplier (0.0 to 1.0).</param>
         /// <param name="duration">Duration multiplier (seconds).</param>
         /// <param name="angleX">Rotation angle around X axis for spatial mapping.</param>
         /// <param name="offsetY">Vertical offset for spatial mapping.</param>
         /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int playPosParam(string key, int position, float intensity, float duration, float angleX, float offsetY);
+        public static extern int playParam(string eventId, int requestId, float intensity, float duration, float angleX, float offsetY);
 
         /// <summary>
-        /// Plays a haptic pattern on a glove device. Intended for haptic glove products.
+        /// Plays a haptic pattern starting at a specific time offset, with custom parameters.
         /// </summary>
-        /// <param name="key">Identifier for the haptic pattern (event key).</param>
-        /// <param name="timeout">Timeout in milliseconds for the glove response.</param>
-        /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
+        /// <param name="eventId">Identifier for the haptic pattern.</param>
+        /// <param name="requestId">Caller-assigned request identifier.</param>
+        /// <param name="startMillis">Start offset in milliseconds from the beginning of the pattern.</param>
+        /// <param name="intensity">Intensity multiplier (0.0 to 1.0).</param>
+        /// <param name="duration">Duration multiplier (seconds).</param>
+        /// <param name="angleX">Rotation angle around X axis for spatial mapping.</param>
+        /// <param name="offsetY">Vertical offset for spatial mapping.</param>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int playGlove(string key, int timeout);
-
-        /// <summary>
-        /// Plays a dot pattern: activates specific motors for a given duration.
-        /// </summary>
-        /// <param name="position">Device position index.</param>
-        /// <param name="durationMillis">Duration of each dot in milliseconds.</param>
-        /// <param name="motors">Array of motor indices to activate.</param>
-        /// <param name="size">Length of the motors array.</param>
-        /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
-        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int playDot(int position, int durationMillis, int[] motors, int size);
-
-        /// <summary>
-        /// Plays a waveform pattern by specifying motor intensities, play times, and shape values.
-        /// </summary>
-        /// <param name="position">Device position index.</param>
-        /// <param name="motorValues">Array of intensity values per motor.</param>
-        /// <param name="playTimeValues">Array of play durations per motor.</param>
-        /// <param name="shapeValues">Array specifying waveform shape parameters.</param>
-        /// <param name="motorLen">Length of the motor arrays.</param>
-        /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
-        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int playWaveform(int position, int[] motorValues, int[] playTimeValues, int[] shapeValues, int motorLen);
-
-        /// <summary>
-        /// Plays a path-based haptic effect by specifying x/y coordinates and intensities.
-        /// </summary>
-        /// <param name="position">Device position index.</param>
-        /// <param name="xValues">Array of X-axis coordinates for each point.</param>
-        /// <param name="yValues">Array of Y-axis coordinates for each point.</param>
-        /// <param name="intensityValues">Array of intensity values for each point.</param>
-        /// <param name="Len">Length of the coordinate and intensity arrays.</param>
-        /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
-        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int playPath(int position, float[] xValues, float[] yValues, int[] intensityValues, int Len);
+        public static extern void playWithStartTime(string eventId, int requestId, int startMillis, float intensity, float duration, float angleX, float offsetY);
 
         /// <summary>
         /// Plays a looping haptic pattern with specified interval and maximum loop count.
         /// </summary>
-        /// <param name="key">Identifier for the haptic pattern (event key).</param>
+        /// <param name="eventId">Identifier for the haptic pattern.</param>
+        /// <param name="requestId">Caller-assigned request identifier.</param>
         /// <param name="intensity">Intensity multiplier (0.0 to 1.0).</param>
         /// <param name="duration">Duration multiplier (seconds).</param>
         /// <param name="angleX">Rotation angle around X axis for spatial mapping.</param>
@@ -220,36 +174,45 @@ namespace tact_csharp2
         /// <param name="maxCount">Maximum number of loops (0 for infinite).</param>
         /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int playLoop(string key, float intensity, float duration, float angleX, float offsetY, int interval, int maxCount);
+        public static extern int playLoop(string eventId, int requestId, float intensity, float duration, float angleX, float offsetY, int interval, int maxCount);
 
         /// <summary>
-        /// Plays a pattern without returning a result code.
-        /// Useful for fire-and-forget patterns where you don't need the request ID.
+        /// Pauses a currently playing haptic event by its identifier.
         /// </summary>
-        /// <param name="key">Identifier for the haptic pattern (event key).</param>
+        /// <param name="eventId">Identifier for the haptic pattern to pause.</param>
+        /// <returns>Status or remaining time depending on native implementation.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern void playWithoutResult(string key);
+        public static extern int pause(string eventId);
+
+        /// <summary>
+        /// Resumes a previously paused haptic event by its identifier.
+        /// </summary>
+        /// <param name="eventId">Identifier for the haptic pattern to resume.</param>
+        /// <returns>True if the event was resumed; otherwise, false.</returns>
+        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool resume(string eventId);
 
         /// <summary>
         /// Stops a specific haptic playback by request ID.
         /// </summary>
-        /// <param name="key">Request ID returned from play/playPosParam.</param>
+        /// <param name="requestId">Request ID returned from play/playParam/playLoop.</param>
         /// <returns>True if playback stopped; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        public static extern bool stop(int key);
+        public static extern bool stop(int requestId);
 
         /// <summary>
-        /// Stops playback of a haptic event by its event identifier (string key).
+        /// Stops playback of a haptic event by its event identifier (string id).
         /// </summary>
-        /// <param name="eventId">Event key/name to stop.</param>
+        /// <param name="eventId">Event id/key to stop.</param>
         /// <returns>True if playback stopped; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
         public static extern bool stopByEventId(string eventId);
 
         /// <summary>
-        /// Stops all active haptic feedback on the device.
+        /// Stops all active haptic feedback.
         /// </summary>
         /// <returns>True if all playback stopped; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
@@ -267,20 +230,62 @@ namespace tact_csharp2
         /// <summary>
         /// Checks if a specific request ID is still playing.
         /// </summary>
-        /// <param name="key">Request ID to query.</param>
+        /// <param name="requestId">Request ID to query.</param>
         /// <returns>True if still playing; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        public static extern bool isPlayingByRequestId(int key);
+        public static extern bool isPlayingByRequestId(int requestId);
 
         /// <summary>
-        /// Checks if a haptic event identified by string key is playing.
+        /// Checks if a haptic event identified by string id is playing.
         /// </summary>
-        /// <param name="eventId">Event key/name to query.</param>
+        /// <param name="eventId">Event id/key to query.</param>
         /// <returns>True if still playing; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
         public static extern bool isPlayingByEventId(string eventId);
+
+        #endregion
+
+        #region Low-Level Pattern Playback
+
+        /// <summary>
+        /// Plays a dot pattern: activates specific motors for a given duration.
+        /// </summary>
+        /// <param name="requestId">Caller-assigned request identifier.</param>
+        /// <param name="position">Device position index.</param>
+        /// <param name="durationMillis">Duration of each dot in milliseconds.</param>
+        /// <param name="motors">Array of motor indices to activate.</param>
+        /// <param name="size">Length of the motors array.</param>
+        /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
+        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int playDot(int requestId, int position, int durationMillis, int[] motors, int size);
+
+        /// <summary>
+        /// Plays a waveform pattern by specifying motor intensities, play times, and shape values.
+        /// </summary>
+        /// <param name="requestId">Caller-assigned request identifier.</param>
+        /// <param name="position">Device position index.</param>
+        /// <param name="motorValues">Array of intensity values per motor.</param>
+        /// <param name="playTimeValues">Array of play durations per motor.</param>
+        /// <param name="shapeValues">Array specifying waveform shape parameters.</param>
+        /// <param name="motorLen">Length of the motor arrays.</param>
+        /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
+        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int playWaveform(int requestId, int position, int[] motorValues, int[] playTimeValues, int[] shapeValues, int motorLen);
+
+        /// <summary>
+        /// Plays a path-based haptic effect by specifying x/y coordinates and intensities.
+        /// </summary>
+        /// <param name="requestId">Caller-assigned request identifier.</param>
+        /// <param name="position">Device position index.</param>
+        /// <param name="xValues">Array of X-axis coordinates for each point.</param>
+        /// <param name="yValues">Array of Y-axis coordinates for each point.</param>
+        /// <param name="intensityValues">Array of intensity values for each point.</param>
+        /// <param name="Len">Length of the coordinate and intensity arrays.</param>
+        /// <returns>Request ID (>0) if playback started; otherwise, negative or zero.</returns>
+        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int playPath(int requestId, int position, float[] xValues, float[] yValues, int[] intensityValues, int Len);
 
         #endregion
 
@@ -298,14 +303,14 @@ namespace tact_csharp2
         /// <summary>
         /// Sends a ping to a specific bHaptics device.
         /// </summary>
-        /// <param name="address">bHaptics device to ping.</param>
+        /// <param name="address">Device address to ping.</param>
         /// <returns>True if device responded; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
         public static extern bool ping(string address);
         
         /// <summary>
-        /// Broadcasts a ping to all known bHaptics devices.
+        /// Sends a ping to all known bHaptics devices.
         /// </summary>
         /// <returns>True if at least one device responded; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
@@ -315,11 +320,21 @@ namespace tact_csharp2
         /// <summary>
         /// Swaps the primary and secondary device positions (e.g., left/right swap) for a given address.
         /// </summary>
-        /// <param name="address">Device network address to apply swap.</param>
+        /// <param name="address">Device address to apply swap.</param>
         /// <returns>True if swap succeeded; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
         public static extern bool swapPosition(string address);
+
+        /// <summary>
+        /// Sets the VSM (vibration sequence mode) for a device.
+        /// </summary>
+        /// <param name="address">Device address.</param>
+        /// <param name="vsm">VSM setting value.</param>
+        /// <returns>True if the operation succeeded; otherwise, false.</returns>
+        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool setDeviceVsm(string address, int vsm);
 
         /// <summary>
         /// Retrieves connected device information as a JSON string.
@@ -351,50 +366,20 @@ namespace tact_csharp2
         /// <summary>
         /// Launches the bHaptics Player application.
         /// </summary>
-        /// <param name="launch">True to launch the Player.</param>
+        /// <param name="tryLaunch">True to launch the Player.</param>
         /// <returns>True if the operation succeeded; otherwise, false.</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        public static extern bool launchPlayer(bool launch);
+        public static extern bool launchPlayer(bool tryLaunch);
 
         #endregion
 
-        #region Advanced Message & Mapping Retrieval
-
-        /// <summary>
-        /// Retrieves the latest haptic messages from the bHaptics server for the given application.
-        /// </summary>
-        /// <param name="apiKey">User's bHaptics API key.</param>
-        /// <param name="appId">Application identifier.</param>
-        /// <param name="lastVersion">Version number of the last message received.</param>
-        /// <param name="status">Output status code (e.g., HTTP-like status).</param>
-        /// <returns>Pointer to JSON string of new haptic messages.</returns>
-        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr bHapticsGetHapticMessage(
-            string apiKey,
-            string appId,
-            int lastVersion,
-            out int status);
-
-        /// <summary>
-        /// Retrieves custom haptic event mappings from the bHaptics server for the given application.
-        /// </summary>
-        /// <param name="apiKey">User's bHaptics API key.</param>
-        /// <param name="appId">Application identifier.</param>
-        /// <param name="lastVersion">Version number of the last mapping received.</param>
-        /// <param name="status">Output status code.</param>
-        /// <returns>Pointer to JSON string of new haptic mappings.</returns>
-        [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr bHapticsGetHapticMappings(
-            string apiKey,
-            string appId,
-            int lastVersion,
-            out int status);
+        #region Mapping & Timing Retrieval
 
         /// <summary>
         /// Retrieves the event timing metadata for a given event identifier.
         /// </summary>
-        /// <param name="eventId">Event key/name to query timing for.</param>
+        /// <param name="eventId">Event id/key to query timing for.</param>
         /// <returns>Integer representing timing data (e.g., duration in ms).</returns>
         [DllImport(ModuleName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int getEventTime(string eventId);
