@@ -45,14 +45,14 @@
       - [`reInitMessage`](#reinitmessage)
     - [Playback Controls](#playback-controls)
       - [`play`](#play)
-      - [`playPos`](#playpos)
-      - [`playPosParam`](#playposparam)
-      - [`playGlove`](#playglove)
+      - [`playParam`](#playposparam)
       - [`playDot`](#playdot)
       - [`playWaveform`](#playwaveform)
       - [`playPath`](#playpath)
+      - [`playWithStartTime`](#playwithstarttime)
       - [`playLoop`](#playloop)
-      - [`playWithoutResult`](#playwithoutresult)
+      - [`pause`](#pause)
+      - [`resume`](#resume)            
       - [`stop`](#stop)
       - [`stopByEventId`](#stopbyeventid)
       - [`stopAll`](#stopall)
@@ -64,14 +64,13 @@
       - [`ping`](#ping)
       - [`pingAll`](#pingall)
       - [`swapPosition`](#swapposition)
+      - [`getDeviceVsm`](#getdevicevsm)
       - [`getDeviceInfoJson`](#getdeviceinfojson)
     - [Player Application Controls](#player-application-controls)
       - [`isPlayerInstalled`](#isplayerinstalled)
       - [`isPlayerRunning`](#isplayerrunning)
       - [`launchPlayer`](#launchplayer)
     - [Advanced Message & Mapping Retrieval](#advanced-message--mapping-retrieval)
-      - [`bHapticsGetHapticMessage`](#bhapticsgethapticmessage)
-      - [`bHapticsGetHapticMappings`](#bhapticsgethapticmappings)
       - [`getEventTime`](#geteventtime)
       - [`getHapticMappingsJson`](#gethapticmappingsjson)
 - [Licensing Notes](#licensing-notes)
@@ -109,7 +108,7 @@ This makes it easy to integrate bHaptics support any game as long as you can con
 
 This project is an **unofficial community-driven tool**. It is not affiliated with or endorsed by bHaptics Inc.
 
-For more details, see the [_Licensing Notes_](https://github.com/Dteyn/bHapticsRelay/tree/main?tab=readme-ov-file#licensing-notes) section at the end of this document.
+For more details, see the [_Licensing Notes_](#licensing-notes) section at the end of this document.
 
 ## bHaptics SDK2 Integration
 
@@ -685,15 +684,18 @@ If you change any of the event names in the portal, make sure to keep everything
 
 ## Test Suite
 
-I've included a Test Suite which can be used to test bHapticsRelay, along with an example implementations with some effects to try.
+I've included a Test Suite which can be used to test bHapticsRelay, along with an example implementations with some effects to try. The Test Suite also includes a way to test all commands in SDK2 to become familiar with them.
 
-The Test Suite also includes a way to test all commands in SDK2 to become familiar with them.
+### [bHapticsRelay_Test_Suite.pyw](https://raw.githubusercontent.com/Dteyn/bHapticsRelay/refs/heads/master/bHapticsRelay_Test_Suite.pyw)
+(right click, Save As)
+
+**Requirements:** [Python 3.x](https://python.org)
 
 To use it, make sure bHapticsRelay is started and in Websocket mode. Then, start the Test Suite and make sure the Websocket address/port are correct, and click Connect.
 
 You can then try various commands to see how they work and verify that bHapticsRelay is working correctly.
 
-You can also use this with your own implementation to test it; simply edit the `config.cfg` and/or `DefaultConfig.json` for bHapticsRelay to use your project, and then start the test suite. It will list out the effects from your project and let you test them accordingly.
+You can also use this with your own project's API key to test everything; simply edit the `config.cfg` and/or `DefaultConfig.json` for bHapticsRelay to use your project, and then start the test suite. It will list out the effects from your project and let you test them accordingly.
 
 The test suite is just a simple Python script for now and I don't intend to improve it further, but if anyone wants to submit improvements for that I'll happily merge them.
 
